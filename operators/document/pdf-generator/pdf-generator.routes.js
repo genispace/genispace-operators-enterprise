@@ -9,12 +9,12 @@ const express = require('express');
 const path = require('path');
 const os = require('os');
 const PDFGenerator = require('./PDFGenerator');
-const { sendSuccessResponse, sendErrorResponse, asyncHandler } = require('../../src/utils/response');
+const { sendSuccessResponse, sendErrorResponse, asyncHandler } = require('../../../src/utils/response');
 
 const router = express.Router();
 
 // 初始化 PDF 生成器
-const projectRoot = path.resolve(__dirname, '../..');
+const projectRoot = path.resolve(__dirname, '../../..');
 const pdfGenerator = new PDFGenerator({
   tempDir: path.join(os.tmpdir(), 'genispace-pdf-generator'),
   outputDir: path.join(projectRoot, 'outputs')
@@ -263,7 +263,7 @@ router.get('/download/:fileName', (req, res) => {
     }
     
     // 构建文件路径 - 使用项目outputs目录
-    const projectRoot = path.resolve(__dirname, '../..');
+    const projectRoot = path.resolve(__dirname, '../../..');
     const outputDir = path.join(projectRoot, 'outputs');
     const filePath = path.join(outputDir, fileName);
     

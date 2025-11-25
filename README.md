@@ -115,11 +115,17 @@ More enterprise operators coming soon:
 ```
 genispace-operators-enterprise/
 ├── operators/              # Enterprise operators collection
-│   └── document/          # Document processing operators
-│       ├── pdf-generator.operator.js  # PDF generator configuration
-│       ├── pdf-generator.routes.js    # PDF generator business logic
-│       ├── PDFGenerator.js            # Core PDF generation service
-│       └── README.md                  # Detailed documentation
+│   ├── document/          # Document processing operators
+│   │   └── pdf-generator/ # PDF generator operator
+│   │       ├── pdf-generator.operator.js  # PDF generator configuration
+│   │       ├── pdf-generator.routes.js    # PDF generator business logic
+│   │       ├── PDFGenerator.js            # Core PDF generation service
+│   │       └── README.md                  # Detailed documentation
+│   └── platform/          # Platform operators
+│       └── genispace-info/ # GeniSpace platform info operator
+│           ├── genispace-info.operator.js  # Operator configuration
+│           ├── genispace-info.routes.js    # Business logic
+│           └── README.md                   # Documentation
 ├── src/                   # Core framework
 │   ├── config/            # Configuration management
 │   ├── core/              # Core services (discovery, registry, routing)

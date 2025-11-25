@@ -115,11 +115,17 @@ curl -X POST http://localhost:8080/api/document/pdf-generator/generate-from-mark
 ```
 genispace-operators-enterprise/
 ├── operators/              # 企业算子集合
-│   └── document/          # 文档处理算子
-│       ├── pdf-generator.operator.js  # PDF生成器配置
-│       ├── pdf-generator.routes.js    # PDF生成器业务逻辑
-│       ├── PDFGenerator.js            # 核心PDF生成服务
-│       └── README.md                  # 详细文档
+│   ├── document/          # 文档处理算子
+│   │   └── pdf-generator/ # PDF生成器算子
+│   │       ├── pdf-generator.operator.js  # PDF生成器配置
+│   │       ├── pdf-generator.routes.js    # PDF生成器业务逻辑
+│   │       ├── PDFGenerator.js            # 核心PDF生成服务
+│   │       └── README.md                  # 详细文档
+│   └── platform/          # 平台算子
+│       └── genispace-info/ # GeniSpace平台信息算子
+│           ├── genispace-info.operator.js  # 算子配置
+│           ├── genispace-info.routes.js    # 业务逻辑
+│           └── README.md                   # 文档
 ├── src/                   # 核心框架
 │   ├── config/            # 配置管理
 │   ├── core/              # 核心服务（发现、注册、路由）
