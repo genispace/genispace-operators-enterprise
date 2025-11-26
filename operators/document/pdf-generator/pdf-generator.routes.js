@@ -29,13 +29,26 @@ function buildFullHTMLDocument(htmlContent, cssStyles = '') {
                        htmlContent.toLowerCase().includes('<html');
   
   if (isCompleteDoc) {
-    // 如果有额外的 CSS，尝试注入到 head 中
+    // 确保有 charset meta 标签
+    if (!htmlContent.includes('charset="UTF-8"') && !htmlContent.includes("charset='UTF-8'") && !htmlContent.includes('charset=UTF-8')) {
+      if (htmlContent.includes('<head>')) {
+        htmlContent = htmlContent.replace('<head>', '<head>\n  <meta charset="UTF-8">');
+      } else if (htmlContent.includes('<html')) {
+        htmlContent = htmlContent.replace('<html', '<html>\n<head>\n  <meta charset="UTF-8">\n</head>');
+      }
+    }
+    
+    // 如果有额外的 CSS，尝试注入到 head 中（在 </head> 之前，确保优先级）
     if (cssStyles) {
       const styleTag = `<style>${cssStyles}</style>`;
       if (htmlContent.includes('</head>')) {
-        return htmlContent.replace('</head>', `${styleTag}</head>`);
+        // 注入到 </head> 之前，确保 CSS 能够覆盖默认样式
+        return htmlContent.replace('</head>', `  ${styleTag}\n</head>`);
       } else if (htmlContent.includes('<head>')) {
-        return htmlContent.replace('<head>', `<head>${styleTag}`);
+        return htmlContent.replace('<head>', `<head>\n  ${styleTag}`);
+      } else if (htmlContent.includes('<body>')) {
+        // 如果没有 head，在 body 之前添加 head
+        return htmlContent.replace('<body>', `<head>\n  <meta charset="UTF-8">\n  ${styleTag}\n</head>\n<body>`);
       }
     }
     return htmlContent;
