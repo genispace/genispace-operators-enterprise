@@ -18,7 +18,7 @@ const Mustache = require('mustache');
 const OSS = require('ali-oss');
 const COS = require('cos-nodejs-sdk-v5');
 const { v4: uuidv4 } = require('uuid');
-const logger = require('../../src/utils/logger');
+const logger = require('../../../src/utils/logger');
 
 class PDFGenerator {
   constructor(config = {}) {

@@ -36,30 +36,13 @@ npm start
 - 📚 **API文档**: http://localhost:8080/api/docs  
 - 🔍 **健康检查**: http://localhost:8080/health
 
-### 3. 测试PDF生成器
+### 3. 测试算子
 
-```bash
-# 测试HTML转PDF
-curl -X POST http://localhost:8080/api/document/pdf-generator/generate-from-html \
-  -H "Content-Type: application/json" \
-  -d '{
-    "htmlContent": "<h1>企业级服务</h1><p>PDF生成测试</p>",
-    "fileName": "test-document"
-  }'
+访问 [API文档](http://localhost:8080/api/docs) 探索所有可用算子及其接口端点。每个算子都包含详细的文档和示例：
 
-# 测试Markdown模板转PDF（带数据）
-curl -X POST http://localhost:8080/api/document/pdf-generator/generate-from-markdown \
-  -H "Content-Type: application/json" \
-  -d '{
-    "markdownTemplate": "# {{title}}\n\n**作者**: {{author}}\n\n{{content}}",
-    "templateData": {
-      "title": "企业报告", 
-      "author": "GeniSpace", 
-      "content": "这是一个模板示例。"
-    },
-    "fileName": "enterprise-report"
-  }'
-```
+- **PDF生成器**: 查看 [PDF生成器文档](operators/document/pdf-generator/README.md)
+- **Word生成器**: 查看 [Word生成器文档](operators/document/word-generator/README.md)
+- **GeniSpace信息**: 查看 [GeniSpace信息文档](operators/platform/genispace-info/README.md)
 
 ### 4. GeniSpace平台集成
 
@@ -69,37 +52,20 @@ curl -X POST http://localhost:8080/api/document/pdf-generator/generate-from-mark
 
 ## 📦 可用算子
 
-### 📄 PDF生成器
+本企业算子库包含面向常见企业场景的生产就绪算子。每个算子都包含完整的文档和示例。
 
-**面向企业PDF生成需求的文档处理算子**
+### 📄 文档处理算子
 
-| 接口端点 | 方法 | 描述 |
-|----------|--------|-------------|
-| `/api/document/pdf-generator/generate-from-html` | POST | 从HTML内容生成PDF |
-| `/api/document/pdf-generator/generate-from-markdown` | POST | 从Markdown模板生成PDF |
-| `/api/document/pdf-generator/download/{fileName}` | GET | 下载生成的PDF文件 |
+| 算子 | 描述 | 文档 |
+|------|------|------|
+| **PDF生成器** | 从HTML/Markdown模板生成高质量PDF，支持Mustache语法 | [📖 PDF生成器文档](operators/document/pdf-generator/README.md) |
+| **Word生成器** | 从HTML/Markdown模板生成Word文档，支持封面页和目录 | [📖 Word生成器文档](operators/document/word-generator/README.md) |
 
-**核心功能：**
-- ✅ HTML转PDF，支持CSS样式
-- ✅ Markdown模板支持，使用Mustache语法
-- ✅ 模板数据替换（`{{变量}}`）
-- ✅ 多种存储选项（本地/阿里云OSS/腾讯云COS）
-- ✅ 中文字体支持（Noto CJK）
-- ✅ Docker部署就绪
-- ✅ 可配置页面格式和边距
+### 🏢 平台算子
 
-**使用示例：**
-```javascript
-// 带模板变量的HTML
-{
-  "htmlContent": "<h1>{{title}}</h1><p>作者: {{author}}</p>",
-  "templateData": {
-    "title": "企业报告",
-    "author": "GeniSpace团队"
-  },
-  "fileName": "enterprise-report"
-}
-```
+| 算子 | 描述 | 文档 |
+|------|------|------|
+| **GeniSpace信息** | 获取GeniSpace平台信息，包括用户资料、团队和智能体 | [📖 GeniSpace信息文档](operators/platform/genispace-info/README.md) |
 
 ### 🚀 未来算子
 
@@ -115,11 +81,17 @@ curl -X POST http://localhost:8080/api/document/pdf-generator/generate-from-mark
 ```
 genispace-operators-enterprise/
 ├── operators/              # 企业算子集合
-│   └── document/          # 文档处理算子
-│       ├── pdf-generator.operator.js  # PDF生成器配置
-│       ├── pdf-generator.routes.js    # PDF生成器业务逻辑
-│       ├── PDFGenerator.js            # 核心PDF生成服务
-│       └── README.md                  # 详细文档
+│   ├── document/          # 文档处理算子
+│   │   └── pdf-generator/ # PDF生成器算子
+│   │       ├── pdf-generator.operator.js  # PDF生成器配置
+│   │       ├── pdf-generator.routes.js    # PDF生成器业务逻辑
+│   │       ├── PDFGenerator.js            # 核心PDF生成服务
+│   │       └── README.md                  # 详细文档
+│   └── platform/          # 平台算子
+│       └── genispace-info/ # GeniSpace平台信息算子
+│           ├── genispace-info.operator.js  # 算子配置
+│           ├── genispace-info.routes.js    # 业务逻辑
+│           └── README.md                   # 文档
 ├── src/                   # 核心框架
 │   ├── config/            # 配置管理
 │   ├── core/              # 核心服务（发现、注册、路由）
