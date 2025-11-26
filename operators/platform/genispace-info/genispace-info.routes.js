@@ -5,8 +5,8 @@
  */
 
 const express = require('express');
-const { sendSuccessResponse, sendErrorResponse, asyncHandler } = require('../../src/utils/response');
-const logger = require('../../src/utils/logger');
+const { sendSuccessResponse, sendErrorResponse, asyncHandler } = require('../../../src/utils/response');
+const logger = require('../../../src/utils/logger');
 
 const router = express.Router();
 

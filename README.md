@@ -36,30 +36,13 @@ npm start
 - 📚 **API Documentation**: http://localhost:8080/api/docs  
 - 🔍 **Health Check**: http://localhost:8080/health
 
-### 3. Test PDF Generator
+### 3. Test Operators
 
-```bash
-# Test HTML to PDF
-curl -X POST http://localhost:8080/api/document/pdf-generator/generate-from-html \
-  -H "Content-Type: application/json" \
-  -d '{
-    "htmlContent": "<h1>Hello Enterprise</h1><p>PDF Generation Test</p>",
-    "fileName": "test-document"
-  }'
+Visit the [API Documentation](http://localhost:8080/api/docs) to explore all available operators and their endpoints. Each operator includes detailed documentation with examples:
 
-# Test Markdown to PDF with template data
-curl -X POST http://localhost:8080/api/document/pdf-generator/generate-from-markdown \
-  -H "Content-Type: application/json" \
-  -d '{
-    "markdownTemplate": "# {{title}}\n\n**Author**: {{author}}\n\n{{content}}",
-    "templateData": {
-      "title": "Enterprise Report", 
-      "author": "GeniSpace", 
-      "content": "This is a template example."
-    },
-    "fileName": "enterprise-report"
-  }'
-```
+- **PDF Generator**: See [PDF Generator Documentation](operators/document/pdf-generator/README.md)
+- **Word Generator**: See [Word Generator Documentation](operators/document/word-generator/README.md)
+- **GeniSpace Info**: See [GeniSpace Info Documentation](operators/platform/genispace-info/README.md)
 
 ### 4. GeniSpace Platform Integration
 
@@ -69,37 +52,20 @@ The **GeniSpace Dev Team** automatically updates this Enterprise Operators Libra
 
 ## 📦 Available Operators
 
-### 📄 PDF Generator
+This enterprise operators library contains production-ready operators for common enterprise scenarios. Each operator includes comprehensive documentation and examples.
 
-**Document processing operator for enterprise PDF generation needs**
+### 📄 Document Processing Operators
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/document/pdf-generator/generate-from-html` | POST | Generate PDF from HTML content |
-| `/api/document/pdf-generator/generate-from-markdown` | POST | Generate PDF from Markdown template |
-| `/api/document/pdf-generator/download/{fileName}` | GET | Download generated PDF file |
+| Operator | Description | Documentation |
+|----------|-------------|---------------|
+| **PDF Generator** | Generate high-quality PDFs from HTML/Markdown templates with Mustache syntax support | [📖 PDF Generator Docs](operators/document/pdf-generator/README.md) |
+| **Word Generator** | Generate Word documents from HTML/Markdown templates with cover pages and table of contents | [📖 Word Generator Docs](operators/document/word-generator/README.md) |
 
-**Key Features:**
-- ✅ HTML to PDF conversion with CSS styling
-- ✅ Markdown template support with Mustache syntax
-- ✅ Template data substitution (`{{variable}}`)
-- ✅ Multiple storage options (Local/Aliyun OSS/Tencent COS)
-- ✅ Chinese font support (Noto CJK)
-- ✅ Docker deployment ready
-- ✅ Configurable page formats and margins
+### 🏢 Platform Operators
 
-**Example Usage:**
-```javascript
-// HTML with template variables
-{
-  "htmlContent": "<h1>{{title}}</h1><p>Author: {{author}}</p>",
-  "templateData": {
-    "title": "Enterprise Report",
-    "author": "GeniSpace Team"
-  },
-  "fileName": "enterprise-report"
-}
-```
+| Operator | Description | Documentation |
+|----------|-------------|---------------|
+| **GeniSpace Info** | Get GeniSpace platform information including user profiles, teams, and agents | [📖 GeniSpace Info Docs](operators/platform/genispace-info/README.md) |
 
 ### 🚀 Future Operators
 
@@ -115,11 +81,17 @@ More enterprise operators coming soon:
 ```
 genispace-operators-enterprise/
 ├── operators/              # Enterprise operators collection
-│   └── document/          # Document processing operators
-│       ├── pdf-generator.operator.js  # PDF generator configuration
-│       ├── pdf-generator.routes.js    # PDF generator business logic
-│       ├── PDFGenerator.js            # Core PDF generation service
-│       └── README.md                  # Detailed documentation
+│   ├── document/          # Document processing operators
+│   │   └── pdf-generator/ # PDF generator operator
+│   │       ├── pdf-generator.operator.js  # PDF generator configuration
+│   │       ├── pdf-generator.routes.js    # PDF generator business logic
+│   │       ├── PDFGenerator.js            # Core PDF generation service
+│   │       └── README.md                  # Detailed documentation
+│   └── platform/          # Platform operators
+│       └── genispace-info/ # GeniSpace platform info operator
+│           ├── genispace-info.operator.js  # Operator configuration
+│           ├── genispace-info.routes.js    # Business logic
+│           └── README.md                   # Documentation
 ├── src/                   # Core framework
 │   ├── config/            # Configuration management
 │   ├── core/              # Core services (discovery, registry, routing)

@@ -26,12 +26,14 @@ class OperatorDiscovery {
    */
   async scan(directory) {
     try {
-      logger.info(`开始扫描算子目录: ${directory}`);
+      // 确保目录路径是绝对路径
+      const absoluteDir = path.isAbsolute(directory) ? directory : path.resolve(process.cwd(), directory);
+      logger.info(`开始扫描算子目录: ${absoluteDir}`);
       
-      await this._checkDirectory(directory);
+      await this._checkDirectory(absoluteDir);
       
       const operators = [];
-      await this._scanRecursive(directory, operators);
+      await this._scanRecursive(absoluteDir, operators);
       
       logger.info(`算子发现完成，共发现 ${operators.length} 个算子`);
       return operators;
@@ -55,7 +57,11 @@ class OperatorDiscovery {
       }
 
       // 清除缓存支持热重载
-      delete require.cache[require.resolve(filePath)];
+      // 如果 filePath 是绝对路径，直接使用；否则使用 require.resolve
+      const resolvedPath = path.isAbsolute(filePath) ? filePath : require.resolve(filePath);
+      if (require.cache[resolvedPath]) {
+        delete require.cache[resolvedPath];
+      }
       
       const operatorConfig = require(filePath);
       const category = this._extractCategory(filePath);
@@ -76,7 +82,10 @@ class OperatorDiscovery {
       let routes = null;
       
       try {
-        delete require.cache[require.resolve(routesPath)];
+        // 清除路由文件缓存
+        if (require.cache[routesPath]) {
+          delete require.cache[routesPath];
+        }
         routes = require(routesPath);
       } catch (error) {
         logger.error(`路由文件加载失败: ${routesPath}`, { error: error.message });
@@ -139,7 +148,10 @@ class OperatorDiscovery {
         continue;
       }
 
-      const fullPath = path.join(directory, entry.name);
+      // 确保路径是绝对路径
+      const fullPath = path.isAbsolute(directory) 
+        ? path.join(directory, entry.name)
+        : path.resolve(directory, entry.name);
 
       if (entry.isDirectory()) {
         const subCategory = category ? `${category}/${entry.name}` : entry.name;
