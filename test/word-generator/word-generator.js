@@ -7,12 +7,12 @@
 
 const path = require('path');
 const fs = require('fs');
-const WordGenerator = require('../operators/document/word-generator/WordGenerator');
+const WordGenerator = require('../../operators/document/word-generator/WordGenerator');
 const Mustache = require('mustache');
 
 // 创建 WordGenerator 实例（使用本地存储）
 const wordGenerator = new WordGenerator({
-  tempDir: path.join(__dirname, '../temp'),
+  tempDir: path.resolve(__dirname, '../../temp'),
   outputDir: path.resolve(__dirname, '../../outputs/word-generator'),
   storageProvider: 'LOCAL'
 });
