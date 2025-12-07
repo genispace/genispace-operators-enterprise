@@ -1,0 +1,195 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches:
+      - main
+      - latest
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'test'
+        type: choice
+        options:
+          - test
+          - prod
+
+env:
+  REGISTRY: magecommerce-docker.pkg.coding.net/genispace/images
+  IMAGE_NAME: genispace-operators-enterprise
+  DOCKER_BUILDKIT: 1
+  CICD_REPO: genispace/cicd
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout genispace-operators-enterprise repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout cicd repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.CICD_REPO_TOKEN }}
+          repository: ${{ env.CICD_REPO }}
+          fetch-depth: 0
+          path: cicd
+        continue-on-error: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Registry
+        uses: docker/login-action@v3
+        with:
+          registry: magecommerce-docker.pkg.coding.net
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Get commit SHA and branch
+        id: repo_info
+        run: |
+          COMMIT_SHA=$(git rev-parse HEAD)
+          BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          SHORT_SHA=${COMMIT_SHA:0:40}
+          echo "COMMIT_SHA=${COMMIT_SHA}" >> $GITHUB_OUTPUT
+          echo "BRANCH=${BRANCH}" >> $GITHUB_OUTPUT
+          echo "SHORT_SHA=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "Commit SHA: ${COMMIT_SHA}"
+          echo "Branch: ${BRANCH}"
+
+      - name: Determine environment and tag prefix
+        id: env
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            ENV="${{ github.event.inputs.environment }}"
+          else
+            BRANCH="${{ steps.repo_info.outputs.BRANCH }}"
+            if [ "$BRANCH" == "main" ]; then
+              ENV="prod"
+            elif [ "$BRANCH" == "latest" ]; then
+              ENV="test"
+            else
+              echo "Unsupported branch: $BRANCH"
+              exit 1
+            fi
+          fi
+          
+          if [ "$ENV" == "prod" ]; then
+            echo "environment=prod" >> $GITHUB_OUTPUT
+            echo "tag_prefix=main" >> $GITHUB_OUTPUT
+            echo "kustomization_path=apps/genispace/overlays/cn/prod/kustomization.yaml" >> $GITHUB_OUTPUT
+          elif [ "$ENV" == "test" ]; then
+            echo "environment=test" >> $GITHUB_OUTPUT
+            echo "tag_prefix=latest" >> $GITHUB_OUTPUT
+            echo "kustomization_path=apps/genispace/overlays/cn/test/kustomization.yaml" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "Environment: $ENV"
+          echo "Tag prefix: $(cat $GITHUB_OUTPUT | grep tag_prefix | cut -d'=' -f2)"
+
+      - name: Build and push Docker image
+        env:
+          COMMIT_SHA: ${{ steps.repo_info.outputs.COMMIT_SHA }}
+          SHORT_SHA: ${{ steps.repo_info.outputs.SHORT_SHA }}
+        run: |
+          TAG_PREFIX="${{ steps.env.outputs.tag_prefix }}"
+          IMAGE_TAG="${TAG_PREFIX}-${SHORT_SHA}"
+          FULL_IMAGE_NAME="${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
+          
+          echo "Building ${FULL_IMAGE_NAME}..."
+          
+          # 构建镜像
+          docker build \
+            -f Dockerfile \
+            -t "${FULL_IMAGE_NAME}" \
+            .
+          
+          # 推送镜像
+          echo "Pushing ${FULL_IMAGE_NAME}..."
+          docker push "${FULL_IMAGE_NAME}"
+          
+          # 同时推送 latest/main 标签
+          if [ "$TAG_PREFIX" == "main" ]; then
+            docker tag "${FULL_IMAGE_NAME}" "${REGISTRY}/${IMAGE_NAME}:main"
+            docker push "${REGISTRY}/${IMAGE_NAME}:main"
+          elif [ "$TAG_PREFIX" == "latest" ]; then
+            docker tag "${FULL_IMAGE_NAME}" "${REGISTRY}/${IMAGE_NAME}:latest"
+            docker push "${REGISTRY}/${IMAGE_NAME}:latest"
+          fi
+          
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Update Kustomization
+        run: |
+          cd cicd
+          
+          # 获取当前分支名
+          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          echo "Current branch: ${CURRENT_BRANCH}"
+          
+          # 先拉取远程最新更改，确保代码仓库是最新的
+          git fetch origin
+          git pull --rebase origin "${CURRENT_BRANCH}" || git pull --rebase origin HEAD
+          
+          cd ..
+          
+          KUSTOMIZATION_PATH="cicd/${{ steps.env.outputs.kustomization_path }}"
+          IMAGE_TAG="${{ env.IMAGE_TAG }}"
+          IMAGE_NAME_FULL="${REGISTRY}/${IMAGE_NAME}"
+          
+          echo "Updating ${KUSTOMIZATION_PATH} with tag ${IMAGE_TAG}"
+          
+          # 使用 yq 更新镜像标签
+          yq eval ".images[] |= select(.name == \"${IMAGE_NAME_FULL}\") |= .newTag = \"${IMAGE_TAG}\"" -i "${KUSTOMIZATION_PATH}"
+          
+          # 验证更新是否成功
+          echo "Updated kustomization.yaml:"
+          yq eval '.images[] | select(.name == "'"${IMAGE_NAME_FULL}"'")' "${KUSTOMIZATION_PATH}"
+
+      - name: Commit and push changes to cicd repository
+        run: |
+          cd cicd
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          KUSTOMIZATION_PATH="${{ steps.env.outputs.kustomization_path }}"
+          ENVIRONMENT="${{ steps.env.outputs.environment }}"
+          IMAGE_TAG="${{ env.IMAGE_TAG }}"
+          
+          # 获取当前分支名
+          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          echo "Current branch: ${CURRENT_BRANCH}"
+          
+          git add "${KUSTOMIZATION_PATH}"
+          
+          # 检查是否有更改
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore(${{ env.IMAGE_NAME }}): update image tag to ${IMAGE_TAG} for ${ENVIRONMENT} environment [skip ci]"
+            git push origin "${CURRENT_BRANCH}"
+            echo "Successfully pushed changes to ${ENVIRONMENT} environment"
+          fi
+
+      - name: Summary
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Service**: ${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: ${{ steps.env.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: ${{ steps.repo_info.outputs.BRANCH }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit SHA**: ${{ steps.repo_info.outputs.COMMIT_SHA }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image Tag**: ${{ env.IMAGE_TAG }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Kustomization Path**: cicd/${{ steps.env.outputs.kustomization_path }}" >> $GITHUB_STEP_SUMMARY
