@@ -201,72 +201,58 @@ function setCache(apiKey, result) {
 function auth() {
   return async (req, res, next) => {
     try {
-      // 如果认证未启用，直接通过
-      if (!config.genispace?.auth?.enabled) {
-        return next();
-      }
-
+      const apiPrefix = config.apiPrefix || '/api';
+      
       // 公开路径
       const publicPaths = [
         '/',
         '/health',
-        '/api/docs',
-        '/api/docs.json',
-        '/api/operators'
+        `${apiPrefix}/docs`,
+        `${apiPrefix}/docs.json`,
+        `${apiPrefix}/operators`
       ];
 
       if (publicPaths.includes(req.path) || 
-          req.path.startsWith('/api/docs/') ||
-          /^\/api\/operators\/[^\/]+\/[^\/]+\/definition$/.test(req.path)) {
+          req.path.startsWith(`${apiPrefix}/docs/`) ||
+          new RegExp(`^${apiPrefix}/operators/[^/]+/[^/]+/definition$`).test(req.path)) {
         return next();
       }
 
-      // 只对 /api/ 路径认证
-      if (!req.path.startsWith('/api/')) {
+      // 只对 API 前缀路径处理
+      if (!req.path.startsWith(apiPrefix)) {
         return next();
       }
 
       // 提取 API Key
       const apiKey = extractApiKey(req);
-      
-      if (!apiKey) {
-        return res.status(401).json({
-          success: false,
-          error: '缺少 API Key',
-          message: '请在 Authorization 头中提供 API Key'
-        });
-      }
 
-      // 检查缓存
-      let authResult = getCache(apiKey);
-      
-      if (!authResult) {
-        authResult = await validateApiKey(apiKey);
-        
-        if (authResult && authResult.success) {
-          setCache(apiKey, authResult);
+      // 如果存在 API Key，尝试验证并设置 req.genispace
+      // 算子自己会通过 checkAuth 方法判断是否需要认证
+      if (apiKey) {
+        try {
+          // 检查缓存
+          let authResult = getCache(apiKey);
+          
+          if (!authResult) {
+            authResult = await validateApiKey(apiKey);
+            
+            if (authResult && authResult.success) {
+              setCache(apiKey, authResult);
+            }
+          }
+
+          if (authResult && authResult.success) {
+            req.genispace = {
+              user: authResult.user,
+              client: authResult.client,
+              apiKey: apiKey,
+              keyInfo: authResult.keyInfo
+            };
+          }
+        } catch (error) {
+          // 忽略验证错误，继续执行，让算子自己判断
         }
       }
-
-      if (!authResult || !authResult.success) {
-        return res.status(401).json({
-          success: false,
-          error: '认证失败'
-        });
-      }
-
-      // 添加到请求对象
-      req.genispace = {
-        user: authResult.user,
-        client: authResult.client,
-        apiKey: apiKey,
-        keyInfo: authResult.keyInfo // 包含平台API Key信息
-      };
-
-      logger.info('认证成功', {
-        userId: authResult.user.id,
-        endpoint: req.path
-      });
 
       next();
 
