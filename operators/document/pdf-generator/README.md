@@ -14,7 +14,7 @@ GeniSpace PDF Generator 算子已成功迁移到 GeniSpace Operators Enterprise 
 ### ✅ 完整功能迁移
 - ✅ HTML转PDF - 支持复杂HTML结构和CSS3样式
 - ✅ Markdown模板转PDF - 支持Mustache模板语法和JSON数据填充
-- ✅ 云存储集成 - 支持阿里云OSS、腾讯云COS、本地存储
+- ✅ 平台存储集成 - 通过 GeniSpace SDK 自动上传到平台存储
 - ✅ 高质量渲染 - 基于Puppeteer的高清PDF输出
 - ✅ 自定义样式 - 完整的CSS支持和页面设置
 - ✅ 错误处理 - 完善的参数验证和异常处理
@@ -147,25 +147,7 @@ PDF文件默认保存在项目根目录的 `outputs/` 文件夹中，这样设�
 
 ### 环境变量支持
 
-算子支持原PDF生成器的所有环境变量：
-
 ```bash
-# 存储配置
-STORAGE_PROVIDER=LOCAL           # LOCAL | ALIYUN_OSS | TENCENT_COS
-FILE_SERVER_URL=http://localhost:8080/api/document/pdf-generator/download  # 本地下载URL（可选，默认根据算子路径生成）
-
-# 阿里云OSS配置
-ALIYUN_ACCESS_KEY_ID=your_key
-ALIYUN_ACCESS_KEY_SECRET=your_secret
-ALIYUN_OSS_BUCKET=your_bucket
-ALIYUN_OSS_REGION=oss-cn-hangzhou
-
-# 腾讯云COS配置
-TENCENT_SECRET_ID=your_secret_id
-TENCENT_SECRET_KEY=your_secret_key
-TENCENT_COS_BUCKET=your_bucket
-TENCENT_COS_REGION=ap-beijing
-
 # Puppeteer配置
 PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 ```

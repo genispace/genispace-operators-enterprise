@@ -4,7 +4,7 @@
  * 核心功能：
  * 1. Markdown 模板解析和 JSON 数据填充
  * 2. 高质量 PDF 生成
- * 3. 云存储上传（阿里云 OSS / 腾讯云 COS）
+ * 3. 平台存储上传（通过 GeniSpace SDK）
  * 4. 临时文件管理
  */
 
@@ -15,38 +15,17 @@ const axios = require('axios');
 const puppeteer = require('puppeteer');
 const marked = require('marked');
 const Mustache = require('mustache');
-const OSS = require('ali-oss');
-const COS = require('cos-nodejs-sdk-v5');
 const { v4: uuidv4 } = require('uuid');
+const GeniSpace = require('genispace');
 const logger = require('../../../src/utils/logger');
 const config = require('../../../src/config/env');
 
 class PDFGenerator {
   constructor(config = {}) {
     this.config = {
+      // 临时目录：使用系统临时目录，文件生成后立即上传并删除
       tempDir: config.tempDir || path.join(os.tmpdir(), 'pdf-generator'),
-      outputDir: config.outputDir || path.join(os.tmpdir(), 'pdf-generator', 'outputs'),
-      
-      // 阿里云 OSS 配置
-      aliyun: {
-        region: config.aliyun?.region || process.env.ALIYUN_OSS_REGION,
-        accessKeyId: config.aliyun?.accessKeyId || process.env.ALIYUN_ACCESS_KEY_ID,
-        accessKeySecret: config.aliyun?.accessKeySecret || process.env.ALIYUN_ACCESS_KEY_SECRET,
-        bucket: config.aliyun?.bucket || process.env.ALIYUN_OSS_BUCKET,
-        endpoint: config.aliyun?.endpoint || process.env.ALIYUN_OSS_ENDPOINT,
-        customDomain: config.aliyun?.customDomain || process.env.ALIYUN_OSS_CUSTOM_DOMAIN,
-        ...config.aliyun
-      },
-      
-      // 腾讯云 COS 配置
-      tencent: {
-        SecretId: config.tencent?.SecretId || process.env.TENCENT_SECRET_ID,
-        SecretKey: config.tencent?.SecretKey || process.env.TENCENT_SECRET_KEY,
-        Bucket: config.tencent?.Bucket || process.env.TENCENT_COS_BUCKET,
-        Region: config.tencent?.Region || process.env.TENCENT_COS_REGION,
-        customDomain: config.tencent?.customDomain || process.env.TENCENT_COS_CUSTOM_DOMAIN,
-        ...config.tencent
-      },
+      outputDir: config.outputDir || path.join(os.tmpdir(), 'pdf-generator'),
       
       // PDF 默认选项
       defaultPdfOptions: {
@@ -238,9 +217,6 @@ class PDFGenerator {
     
     // 确保目录存在
     this.ensureDirectories();
-    
-    // 初始化云存储客户端
-    this.initCloudClients();
   }
   
   /**
@@ -255,36 +231,20 @@ class PDFGenerator {
   }
   
   /**
-   * 初始化云存储客户端
+   * 检查认证（必须启用 GENISPACE_AUTH）
+   * @param {Object} req - Express 请求对象
+   * @throws {Error} 如果未启用认证或缺少认证头
    */
-  initCloudClients() {
-    // 初始化阿里云 OSS 客户端
-    if (this.config.aliyun.accessKeyId && this.config.aliyun.accessKeySecret && this.config.aliyun.bucket) {
-      try {
-        this.ossClient = new OSS({
-          region: this.config.aliyun.region,
-          accessKeyId: this.config.aliyun.accessKeyId,
-          accessKeySecret: this.config.aliyun.accessKeySecret,
-          bucket: this.config.aliyun.bucket,
-          endpoint: this.config.aliyun.endpoint
-        });
-        logger.info('阿里云 OSS 客户端初始化成功');
-      } catch (error) {
-        logger.warn('阿里云 OSS 客户端初始化失败', { error: error.message });
-      }
+  checkAuth(req) {
+    const authEnabled = process.env.GENISPACE_AUTH_ENABLED === 'true' || 
+                       process.env.GENISPACE_AUTH === 'true';
+    
+    if (!authEnabled) {
+      throw new Error('必须启用 GENISPACE_AUTH 才能使用此功能');
     }
     
-    // 初始化腾讯云 COS 客户端
-    if (this.config.tencent.SecretId && this.config.tencent.SecretKey && this.config.tencent.Bucket) {
-      try {
-        this.cosClient = new COS({
-          SecretId: this.config.tencent.SecretId,
-          SecretKey: this.config.tencent.SecretKey
-        });
-        logger.info('腾讯云 COS 客户端初始化成功');
-      } catch (error) {
-        logger.warn('腾讯云 COS 客户端初始化失败', { error: error.message });
-      }
+    if (!req || !req.genispace || !req.genispace.client) {
+      throw new Error('缺少认证信息，请在请求头中提供 GeniSpace API Key');
     }
   }
   
@@ -296,7 +256,7 @@ class PDFGenerator {
    * @param {string} options.fileName - 输出文件名（可选）
    * @param {Object} options.pdfOptions - PDF 生成选项（可选）
    * @param {string} options.cssStyles - 自定义 CSS 样式（可选）
-   * @param {string} options.cloudProvider - 云存储提供商（可选）
+   * @param {Object} options.req - Express 请求对象（用于认证和 SDK 上传）
    * @returns {Promise<Object>} - 生成结果
    */
   async generatePDF(options) {
@@ -306,14 +266,16 @@ class PDFGenerator {
       fileName,
       pdfOptions = {},
       cssStyles = '',
-      cloudProvider
+      req
     } = options;
+    
+    // 检查认证
+    this.checkAuth(req);
     
     logger.info('开始生成 PDF', {
       hasTemplate: !!markdownTemplate,
       dataKeys: templateData ? Object.keys(templateData) : [],
-      fileName,
-      cloudProvider
+      fileName
     });
     
     if (!markdownTemplate) {
@@ -341,15 +303,14 @@ class PDFGenerator {
       const htmlContent = this.convertMarkdownToHTML(filledMarkdown, cssStyles);
       
       // 生成 PDF
-      const pdfPath = await this.generatePDFFromHTML(htmlContent, finalFileName, pdfOptions);
+      const pdfPath = await this.generatePDFFromHTML(htmlContent, {}, finalFileName, pdfOptions);
       
       // 获取 PDF 信息
       const fileStats = fs.statSync(pdfPath);
       const pageCount = await this.getPDFPageCount(pdfPath);
       
-      // 上传到云存储
-      const provider = this.getStorageProvider();
-      const pdfURL = await this.uploadToCloud(pdfPath, finalFileName);
+      // 上传到平台存储
+      const pdfURL = await this.uploadToPlatformStorage(pdfPath, finalFileName, req);
       
       // 清理临时文件
       this.cleanupFiles(pdfPath);
@@ -360,7 +321,7 @@ class PDFGenerator {
         pageCount,
         fileSize: fileStats.size,
         fileName: `${finalFileName}.pdf`,
-        storageProvider: provider,
+        storageProvider: 'platform',
         generatedAt: new Date().toISOString()
       };
       
@@ -545,170 +506,51 @@ class PDFGenerator {
   }
   
   /**
-   * 获取配置的存储提供商
-   * @returns {string} - 存储提供商
-   */
-  getStorageProvider() {
-    const provider = process.env.STORAGE_PROVIDER || 'LOCAL';
-    
-    switch (provider.toUpperCase()) {
-      case 'ALIYUN_OSS':
-        if (this.ossClient) {
-          return 'aliyun';
-        }
-        logger.warn('ALIYUN_OSS 配置不完整，使用 LOCAL 存储', {
-          hasOSSClient: !!this.ossClient
-        });
-        return 'local';
-        
-      case 'TENCENT_COS':
-        if (this.cosClient) {
-          return 'tencent';
-        }
-        logger.warn('TENCENT_COS 配置不完整，使用 LOCAL 存储', {
-          hasCOSClient: !!this.cosClient
-        });
-        return 'local';
-        
-      case 'LOCAL':
-        return 'local';
-        
-      default:
-        logger.warn(`未知的存储提供商: ${provider}，使用 LOCAL`);
-        return 'local';
-    }
-  }
-  
-  /**
-   * 上传文件到配置的存储提供商
+   * 上传文件到平台存储（通过 GeniSpace SDK）
    * @param {string} filePath - 文件路径
-   * @param {string} fileName - 文件名
+   * @param {string} fileName - 文件名（不含扩展名）
+   * @param {Object} req - Express 请求对象（包含认证信息）
    * @returns {Promise<string>} - 文件 URL
    */
-  async uploadToCloud(filePath, fileName) {
-    const provider = this.getStorageProvider();
-    const fileKey = `pdf-documents/${new Date().getFullYear()}/${new Date().getMonth() + 1}/${fileName}.pdf`;
-    
-    logger.info('上传文件到存储', {
-      provider,
-      fileName,
-      fileKey,
-      storageProvider: process.env.STORAGE_PROVIDER
-    });
-    
-    switch (provider) {
-      case 'aliyun':
-        return await this.uploadToAliyunOSS(filePath, fileKey);
-      case 'tencent':
-        return await this.uploadToTencentCOS(filePath, fileKey);
-      case 'local':
-      default:
-        return await this.saveToLocal(filePath, fileName);
-    }
-  }
-  
-  /**
-   * 上传到阿里云 OSS
-   * @param {string} filePath - 文件路径
-   * @param {string} fileKey - 对象 key
-   * @returns {Promise<string>} - 文件 URL
-   */
-  async uploadToAliyunOSS(filePath, fileKey) {
-    if (!this.ossClient) {
-      throw new Error('阿里云 OSS 客户端未初始化');
+  async uploadToPlatformStorage(filePath, fileName, req) {
+    if (!req || !req.genispace || !req.genispace.client) {
+      throw new Error('缺少认证信息，无法上传文件到平台存储');
     }
     
     try {
-      const result = await this.ossClient.put(fileKey, filePath);
+      const client = req.genispace.client;
+      const folderPath = `pdf-documents/${new Date().getFullYear()}/${new Date().getMonth() + 1}`;
       
-      // 构建访问 URL
-      let url;
-      if (this.config.aliyun.customDomain) {
-        url = `https://${this.config.aliyun.customDomain}/${fileKey}`;
-      } else {
-        url = result.url;
-      }
-      
-      logger.info('文件上传到阿里云 OSS 成功', { url, fileKey });
-      return url;
-    } catch (error) {
-      logger.error('阿里云 OSS 上传失败', { error: error.stack });
-      throw new Error(`阿里云 OSS 上传失败: ${error.message}`);
-    }
-  }
-  
-  /**
-   * 上传到腾讯云 COS
-   * @param {string} filePath - 文件路径
-   * @param {string} fileKey - 对象 key
-   * @returns {Promise<string>} - 文件 URL
-   */
-  async uploadToTencentCOS(filePath, fileKey) {
-    if (!this.cosClient) {
-      throw new Error('腾讯云 COS 客户端未初始化');
-    }
-    
-    try {
-      const result = await new Promise((resolve, reject) => {
-        this.cosClient.putObject({
-          Bucket: this.config.tencent.Bucket,
-          Region: this.config.tencent.Region,
-          Key: fileKey,
-          Body: fs.createReadStream(filePath)
-        }, (err, data) => {
-          if (err) reject(err);
-          else resolve(data);
-        });
+      logger.info('上传文件到平台存储', {
+        fileName,
+        folderPath,
+        filePath
       });
       
-      // 构建访问 URL
-      let url;
-      if (this.config.tencent.customDomain) {
-        url = `https://${this.config.tencent.customDomain}/${fileKey}`;
-      } else {
-        url = `https://${this.config.tencent.Bucket}.cos.${this.config.tencent.Region}.myqcloud.com/${fileKey}`;
-      }
+      // 使用 SDK 上传文件
+      const file = {
+        path: filePath,
+        mimetype: 'application/pdf',
+        originalname: `${fileName}.pdf`
+      };
       
-      logger.info('文件上传到腾讯云 COS 成功', { url, fileKey });
-      return url;
+      const uploadedFile = await client.storage.uploadFile(file, {
+        folderPath,
+        fileName: `${fileName}.pdf`
+      });
+      
+      // 返回文件的 publicUrl 或 url
+      const fileUrl = uploadedFile.publicUrl || uploadedFile.url;
+      
+      logger.info('文件上传到平台存储成功', { 
+        fileId: uploadedFile.id,
+        url: fileUrl 
+      });
+      
+      return fileUrl;
     } catch (error) {
-      logger.error('腾讯云 COS 上传失败', { error: error.stack });
-      throw new Error(`腾讯云 COS 上传失败: ${error.message}`);
-    }
-  }
-  
-  /**
-   * 保存到本地
-   * @param {string} filePath - 原文件路径
-   * @param {string} fileName - 文件名
-   * @returns {Promise<string>} - 文件 URL
-   */
-  async saveToLocal(filePath, fileName) {
-    try {
-      // 使用项目outputs目录，支持多服务共享
-      const projectRoot = path.resolve(__dirname, '../..');
-      const outputDir = path.join(projectRoot, 'outputs');
-      await fs.promises.mkdir(outputDir, { recursive: true });
-      
-      // 生成目标文件路径
-      const targetPath = path.join(outputDir, `${fileName}.pdf`);
-      
-      // 如果源文件和目标文件不同，复制文件
-      if (filePath !== targetPath) {
-        await fs.promises.copyFile(filePath, targetPath);
-        logger.info('文件复制到输出目录', { from: filePath, to: targetPath });
-      }
-      
-      // 使用配置中的API基础URL，只拼接业务路径
-      const apiBaseUrl = config.getApiBaseUrl();
-      const baseUrl = `${apiBaseUrl}/document/pdf-generator/download`;
-      const url = `${baseUrl}/${fileName}.pdf`;
-      
-      logger.info('文件保存到本地成功', { url, path: targetPath });
-      return url;
-    } catch (error) {
-      logger.error('本地文件保存失败', { error: error.stack });
-      throw new Error(`本地文件保存失败: ${error.message}`);
+      logger.error('平台存储上传失败', { error: error.stack });
+      throw new Error(`平台存储上传失败: ${error.message}`);
     }
   }
   
@@ -719,7 +561,9 @@ class PDFGenerator {
   cleanupFiles(...filePaths) {
     for (const filePath of filePaths) {
       try {
-        if (fs.existsSync(filePath) && filePath.includes(this.config.tempDir)) {
+        // 检查文件是否在临时目录中（安全措施：只删除临时目录中的文件）
+        if (fs.existsSync(filePath) && 
+            (filePath.includes(this.config.tempDir) || filePath.includes(this.config.outputDir))) {
           fs.unlinkSync(filePath);
           logger.debug('已删除临时文件', { filePath });
         }
