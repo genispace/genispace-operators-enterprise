@@ -16,7 +16,7 @@ GeniSpace Word Generator 算子，支持从 HTML 和 Markdown 模板生成高质
 - ✅ Markdown模板转Word - 支持Mustache模板语法和JSON数据填充
 - ✅ 封面页生成 - 支持自定义封面页（蓝色背景、标题、公司信息等）
 - ✅ 自动目录生成 - 支持自动生成可点击的目录（Table of Contents）
-- ✅ 云存储集成 - 支持阿里云OSS、腾讯云COS、本地存储
+- ✅ 平台存储集成 - 通过 GeniSpace SDK 自动上传到平台存储
 - ✅ 高质量渲染 - 基于docx库的标准Word文档输出
 - ✅ 自定义样式 - 支持页面设置和格式选项
 - ✅ 错误处理 - 完善的参数验证和异常处理
@@ -261,25 +261,6 @@ curl -X POST http://localhost:8080/api/document/word-generator/generate-from-mar
 
 Word生成算子支持以下环境变量配置：
 
-#### 存储配置
-- `STORAGE_PROVIDER`: 存储提供商，可选值：`LOCAL`、`ALIYUN_OSS`、`TENCENT_COS`（默认：`LOCAL`）
-- `WORD_FILE_SERVER_URL`: Word文件服务器URL（可选，用于本地存储时生成下载链接）
-
-#### 阿里云OSS配置
-- `ALIYUN_OSS_REGION`: OSS区域
-- `ALIYUN_ACCESS_KEY_ID`: Access Key ID
-- `ALIYUN_ACCESS_KEY_SECRET`: Access Key Secret
-- `ALIYUN_OSS_BUCKET`: OSS存储桶名称
-- `ALIYUN_OSS_ENDPOINT`: OSS端点（可选）
-- `ALIYUN_OSS_CUSTOM_DOMAIN`: 自定义域名（可选）
-
-#### 腾讯云COS配置
-- `TENCENT_SECRET_ID`: Secret ID
-- `TENCENT_SECRET_KEY`: Secret Key
-- `TENCENT_COS_BUCKET`: COS存储桶名称
-- `TENCENT_COS_REGION`: COS区域
-- `TENCENT_COS_CUSTOM_DOMAIN`: 自定义域名（可选）
-
 #### 服务器配置
 - `PROTOCOL`: 协议（默认：`http`）
 - `HOST`: 主机地址（默认：`localhost`）
@@ -292,8 +273,7 @@ Word生成算子需要以下依赖：
 - `docx`: ^8.5.0 - Word文档生成库
 - `marked`: ^16.3.0 - Markdown解析库
 - `mustache`: ^4.2.0 - 模板引擎
-- `ali-oss`: ^6.23.0 - 阿里云OSS SDK
-- `cos-nodejs-sdk-v5`: ^2.15.4 - 腾讯云COS SDK
+- `genispace`: ^1.0.4 - GeniSpace SDK（用于平台存储上传）
 
 ## 🎯 使用示例
 

@@ -13,12 +13,8 @@ const { sendSuccessResponse, sendErrorResponse, asyncHandler } = require('../../
 
 const router = express.Router();
 
-// 初始化 Word 生成器
-const projectRoot = path.resolve(__dirname, '../../..');
-const wordGenerator = new WordGenerator({
-  tempDir: path.join(os.tmpdir(), 'genispace-word-generator'),
-  outputDir: path.join(projectRoot, 'outputs', 'word-generator')
-});
+// 初始化 Word 生成器（使用默认临时目录，无需配置）
+const wordGenerator = new WordGenerator();
 
 /**
  * 构建完整的 HTML 文档
@@ -136,6 +132,9 @@ router.post('/generate-from-html', validateGenerateFromHTML, asyncHandler(async 
   const { htmlContent, templateData = {}, cssStyles = '', fileName, wordOptions = {} } = req.body;
   
   try {
+    // 检查认证
+    wordGenerator.checkAuth(req);
+    
     // 如果提供了templateData，使用Mustache进行模板替换
     let processedHtmlContent = htmlContent;
     if (templateData && Object.keys(templateData).length > 0) {
@@ -159,7 +158,7 @@ router.post('/generate-from-html', validateGenerateFromHTML, asyncHandler(async 
     };
     
     // 生成Word
-    const result = await wordGenerator.generateWordFromHTML(
+    const wordPath = await wordGenerator.generateWordFromHTML(
       fullHtmlContent,
       fileName || `word_${Date.now()}`,
       finalWordOptions
@@ -169,30 +168,23 @@ router.post('/generate-from-html', validateGenerateFromHTML, asyncHandler(async 
     
     // 获取文件信息
     const fs = require('fs');
-    const fileStats = fs.statSync(result);
+    const fileStats = fs.statSync(wordPath);
     
-    // 上传到云存储
-    const provider = wordGenerator.getStorageProvider();
-    const wordURL = await wordGenerator.uploadToCloud(result, fileName || `word_${Date.now()}`);
+    // 上传到平台存储
+    const wordURL = await wordGenerator.uploadToPlatformStorage(
+      wordPath, 
+      fileName || `word_${Date.now()}`, 
+      req
+    );
     
-    // 只有在使用云存储时才清理原始临时文件
-    // 本地存储时文件已复制到输出目录，可以清理原始临时文件
-    if (provider !== 'local') {
-      wordGenerator.cleanupFiles(result);
-    } else {
-      // 本地存储时，清理生成时的临时文件，但保留输出目录中的文件供下载
-      const tempDir = path.dirname(result);
-      const outputDir = path.join(projectRoot, 'outputs', 'word-generator');
-      if (tempDir !== outputDir) {
-        wordGenerator.cleanupFiles(result);
-      }
-    }
+    // 清理临时文件
+    wordGenerator.cleanupFiles(wordPath);
     
     const responseData = {
       wordURL,
       fileName: `${fileName || `word_${Date.now()}`}.docx`,
       fileSize: fileStats.size,
-      storageProvider: provider,
+      storageProvider: 'platform',
       generatedAt: new Date().toISOString(),
       processingTimeMs: processingTime
     };
@@ -230,7 +222,8 @@ router.post('/generate-from-markdown', validateGenerateFromMarkdown, asyncHandle
         },
         ...wordOptions
       },
-      cssStyles
+      cssStyles,
+      req // 传递请求对象用于认证和SDK上传
     });
     
     const processingTime = Date.now() - startTime;
