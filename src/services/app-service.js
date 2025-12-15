@@ -17,7 +17,7 @@ class ApplicationService {
     this.config = config;
     this.registry = new OperatorRegistry();
     this.discovery = new OperatorDiscovery();
-    this.router = new RouterBuilder();
+    this.router = new RouterBuilder(config);
     this.docsGenerator = new DocumentGenerator();
     this.initialized = false;
   }
