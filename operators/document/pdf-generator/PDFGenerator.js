@@ -512,7 +512,7 @@ class PDFGenerator {
     
     try {
       const client = req.genispace.client;
-      const folderPath = `pdf-documents/${new Date().getFullYear()}/${new Date().getMonth() + 1}`;
+      const folderPath = `/tmp/operators/pdf-documents/${new Date().getFullYear()}/${new Date().getMonth() + 1}`;
       
       logger.info('上传文件到平台存储', {
         fileName,

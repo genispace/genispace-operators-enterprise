@@ -1013,7 +1013,7 @@ class WordGenerator {
     
     try {
       const client = req.genispace.client;
-      const folderPath = `word-documents/${new Date().getFullYear()}/${new Date().getMonth() + 1}`;
+      const folderPath = `/tmp/operators/word-documents/${new Date().getFullYear()}/${new Date().getMonth() + 1}`;
       
       logger.info('上传文件到平台存储', {
         fileName,
