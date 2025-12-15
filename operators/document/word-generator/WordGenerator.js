@@ -37,6 +37,7 @@ const {
   WidthType
 } = require('docx');
 const logger = require('../../../src/utils/logger');
+const config = require('../../../src/config/env');
 
 class WordGenerator {
   constructor(config = {}) {
@@ -1182,15 +1183,9 @@ class WordGenerator {
         logger.info('文件复制到输出目录', { from: filePath, to: targetPath });
       }
       
-      let baseUrl = process.env.WORD_FILE_SERVER_URL;
-      
-      if (!baseUrl) {
-        const protocol = process.env.PROTOCOL || 'http';
-        const host = process.env.HOST || 'localhost';
-        const port = process.env.PORT || 8080;
-        baseUrl = `${protocol}://${host}:${port}/api/document/word-generator/download`;
-      }
-      
+      // 使用配置中的API基础URL，只拼接业务路径
+      const apiBaseUrl = config.getApiBaseUrl();
+      const baseUrl = `${apiBaseUrl}/document/word-generator/download`;
       const url = `${baseUrl}/${fileName}.docx`;
       
       logger.info('文件保存到本地成功', { url, path: targetPath });

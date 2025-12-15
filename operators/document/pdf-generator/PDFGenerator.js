@@ -19,6 +19,7 @@ const OSS = require('ali-oss');
 const COS = require('cos-nodejs-sdk-v5');
 const { v4: uuidv4 } = require('uuid');
 const logger = require('../../../src/utils/logger');
+const config = require('../../../src/config/env');
 
 class PDFGenerator {
   constructor(config = {}) {
@@ -698,17 +699,9 @@ class PDFGenerator {
         logger.info('文件复制到输出目录', { from: filePath, to: targetPath });
       }
       
-      // 根据环境变量生成正确的URL
-      let baseUrl = process.env.PDF_FILE_SERVER_URL;
-      
-      if (!baseUrl) {
-        // 如果没有设置PDF_FILE_SERVER_URL，使用服务器配置生成下载URL
-        const protocol = process.env.PROTOCOL || 'http';
-        const host = process.env.HOST || 'localhost';
-        const port = process.env.PORT || 8080;
-        baseUrl = `${protocol}://${host}:${port}/api/document/pdf-generator/download`;
-      }
-      
+      // 使用配置中的API基础URL，只拼接业务路径
+      const apiBaseUrl = config.getApiBaseUrl();
+      const baseUrl = `${apiBaseUrl}/document/pdf-generator/download`;
       const url = `${baseUrl}/${fileName}.pdf`;
       
       logger.info('文件保存到本地成功', { url, path: targetPath });
