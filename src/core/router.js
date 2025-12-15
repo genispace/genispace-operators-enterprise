@@ -8,7 +8,9 @@
 const logger = require('../utils/logger');
 
 class RouterBuilder {
-  constructor() {
+  constructor(config = {}) {
+    this.config = config;
+    this.apiPrefix = config.apiPrefix || '/api';
     this.handlerCache = new Map(); // 缓存包装后的处理器
     this.stats = {
       routesCount: 0,
@@ -48,7 +50,7 @@ class RouterBuilder {
         return;
       }
 
-      const basePath = `/api/${config.info.category}/${config.info.name}`;
+      const basePath = `${this.apiPrefix}/${config.info.category}/${config.info.name}`;
       
       // 应用路由到Express应用
       app.use(basePath, this._wrapRouter(routes, config));

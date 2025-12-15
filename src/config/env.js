@@ -90,6 +90,38 @@ const config = {
   }
 };
 
+/**
+ * 获取服务的基础URL
+ * 优先级：OPERATORS_BASE_URL > PROTOCOL://HOST:PORT
+ * @returns {string} 服务基础URL（不包含路径）
+ */
+function getServiceBaseUrl() {
+  // 优先使用 OPERATORS_BASE_URL，因为服务启动配置往往跟最终配置的URL不一致
+  if (process.env.OPERATORS_BASE_URL) {
+    return process.env.OPERATORS_BASE_URL;
+  }
+  
+  // 降级使用服务器启动配置
+  const protocol = process.env.PROTOCOL || 'http';
+  const host = process.env.HOST || 'localhost';
+  const port = process.env.PORT || 8080;
+  return `${protocol}://${host}:${port}`;
+}
+
+/**
+ * 获取完整的API基础URL（包含API前缀）
+ * @returns {string} API基础URL（包含API前缀，不包含具体路径）
+ */
+function getApiBaseUrl() {
+  const baseUrl = getServiceBaseUrl();
+  const apiPrefix = config.apiPrefix;
+  return `${baseUrl}${apiPrefix}`;
+}
+
+// 将方法添加到config对象
+config.getServiceBaseUrl = getServiceBaseUrl;
+config.getApiBaseUrl = getApiBaseUrl;
+
 // 验证必要的配置
 function validateConfig() {
   const required = [];
