@@ -79,18 +79,11 @@ class WordGenerator {
   }
   
   /**
-   * 检查认证（必须启用 GENISPACE_AUTH）
+   * 检查认证（必须提供 GeniSpace API Key）
    * @param {Object} req - Express 请求对象
-   * @throws {Error} 如果未启用认证或缺少认证头
+   * @throws {Error} 如果缺少认证信息
    */
   checkAuth(req) {
-    const authEnabled = process.env.GENISPACE_AUTH_ENABLED === 'true' || 
-                       process.env.GENISPACE_AUTH === 'true';
-    
-    if (!authEnabled) {
-      throw new Error('必须启用 GENISPACE_AUTH 才能使用此功能');
-    }
-    
     if (!req || !req.genispace || !req.genispace.client) {
       throw new Error('缺少认证信息，请在请求头中提供 GeniSpace API Key');
     }
