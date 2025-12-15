@@ -117,8 +117,7 @@ PORT=8080
 NODE_ENV=production
 
 # PDF生成器配置  
-STORAGE_PROVIDER=LOCAL
-PDF_FILE_SERVER_URL=http://localhost:8080/api/document/pdf-generator/download
+# 注意：文件会自动通过 SDK 上传到 GeniSpace 平台存储
 
 # GeniSpace认证（可选）
 GENISPACE_AUTH_ENABLED=false
@@ -139,9 +138,8 @@ docker-compose up -d
 ### 生产环境注意事项
 
 - ✅ 启用 `GENISPACE_AUTH_ENABLED=true` 确保安全性
-- ✅ 配置云存储（阿里云OSS/腾讯云COS）提高可扩展性  
-- ✅ 设置合适的 `PDF_FILE_SERVER_URL` 用于外部访问
-- ✅ 监控 `outputs/` 目录磁盘使用情况
+- ✅ 文件会自动通过 SDK 上传到 GeniSpace 平台存储
+- ✅ 监控临时目录磁盘使用情况
 
 ## 🤝 贡献企业算子
 

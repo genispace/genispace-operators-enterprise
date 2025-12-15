@@ -13,12 +13,8 @@ const { sendSuccessResponse, sendErrorResponse, asyncHandler } = require('../../
 
 const router = express.Router();
 
-// 初始化 PDF 生成器
-const projectRoot = path.resolve(__dirname, '../../..');
-const pdfGenerator = new PDFGenerator({
-  tempDir: path.join(os.tmpdir(), 'genispace-pdf-generator'),
-  outputDir: path.join(projectRoot, 'outputs')
-});
+// 初始化 PDF 生成器（使用默认临时目录，无需配置）
+const pdfGenerator = new PDFGenerator();
 
 /**
  * 构建完整的 HTML 文档
@@ -148,6 +144,9 @@ router.post('/generate-from-html', validateGenerateFromHTML, asyncHandler(async 
   const { htmlContent, templateData = {}, cssStyles = '', fileName, pdfOptions = {} } = req.body;
   
   try {
+    // 检查认证
+    pdfGenerator.checkAuth(req);
+    
     // 如果提供了templateData，使用Mustache进行模板替换
     let processedHtmlContent = htmlContent;
     if (templateData && Object.keys(templateData).length > 0) {
@@ -159,7 +158,7 @@ router.post('/generate-from-html', validateGenerateFromHTML, asyncHandler(async 
     const fullHtmlContent = buildFullHTMLDocument(processedHtmlContent, cssStyles);
     
     // 生成PDF
-    const result = await pdfGenerator.generatePDFFromHTML(
+    const pdfPath = await pdfGenerator.generatePDFFromHTML(
       fullHtmlContent,
       {},
       fileName || `pdf_${Date.now()}`,
@@ -180,32 +179,25 @@ router.post('/generate-from-html', validateGenerateFromHTML, asyncHandler(async 
     
     // 获取PDF信息
     const fs = require('fs');
-    const fileStats = fs.statSync(result);
-    const pageCount = await pdfGenerator.getPDFPageCount(result);
+    const fileStats = fs.statSync(pdfPath);
+    const pageCount = await pdfGenerator.getPDFPageCount(pdfPath);
     
-    // 上传到云存储
-    const provider = pdfGenerator.getStorageProvider();
-    const pdfURL = await pdfGenerator.uploadToCloud(result, fileName || `pdf_${Date.now()}`);
+    // 上传到平台存储
+    const pdfURL = await pdfGenerator.uploadToPlatformStorage(
+      pdfPath, 
+      fileName || `pdf_${Date.now()}`, 
+      req
+    );
     
-    // 只有在使用云存储时才清理原始临时文件
-    // 本地存储时文件已复制到输出目录，可以清理原始临时文件
-    if (provider !== 'local') {
-      pdfGenerator.cleanupFiles(result);
-    } else {
-      // 本地存储时，清理生成时的临时文件，但保留输出目录中的文件供下载
-      const tempDir = path.dirname(result);
-      const outputDir = path.join(projectRoot, 'outputs');
-      if (tempDir !== outputDir) {
-        pdfGenerator.cleanupFiles(result);
-      }
-    }
+    // 清理临时文件
+    pdfGenerator.cleanupFiles(pdfPath);
     
     const responseData = {
       pdfURL,
       fileName: `${fileName || `pdf_${Date.now()}`}.pdf`,
       fileSize: fileStats.size,
       pageCount,
-      storageProvider: provider,
+      storageProvider: 'platform',
       generatedAt: new Date().toISOString(),
       processingTimeMs: processingTime
     };
@@ -244,7 +236,8 @@ router.post('/generate-from-markdown', validateGenerateFromMarkdown, asyncHandle
         printBackground: true,
         ...pdfOptions
       },
-      cssStyles
+      cssStyles,
+      req // 传递请求对象用于认证和SDK上传
     });
     
     const processingTime = Date.now() - startTime;
