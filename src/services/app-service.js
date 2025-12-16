@@ -18,7 +18,7 @@ class ApplicationService {
     this.registry = new OperatorRegistry();
     this.discovery = new OperatorDiscovery();
     this.router = new RouterBuilder(config);
-    this.docsGenerator = new DocumentGenerator();
+    this.docsGenerator = new DocumentGenerator(config);
     this.initialized = false;
   }
 
@@ -98,7 +98,7 @@ class ApplicationService {
         description: config.info.description,
         version: config.info.version,
         category: config.info.category,
-        endpoints: endpoints.map(path => `/api/${config.info.category}/${config.info.name}${path}`),
+        endpoints: endpoints.map(path => `${this.config.apiPrefix || '/api'}/${config.info.category}/${config.info.name}${path}`),
         endpointCount: endpoints.length,
         registeredAt: metadata.registeredAt
       };
@@ -255,7 +255,7 @@ class ApplicationService {
                 },
                 endpoint: {
                   type: 'string',
-                  default: `/api/${category}/${operatorName}${path}`
+                  default: `${this.config.apiPrefix || '/api'}/${category}/${operatorName}${path}`
                 },
                 headers: {
                   type: 'array',
@@ -280,7 +280,7 @@ class ApplicationService {
             },
             values: {
               method: httpMethod.toUpperCase(),
-              endpoint: `/api/${category}/${operatorName}${path}`,
+              endpoint: `${this.config.apiPrefix || '/api'}/${category}/${operatorName}${path}`,
               headers: [],
               caching: {
                 enabled: false,

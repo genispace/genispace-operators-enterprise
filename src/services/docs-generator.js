@@ -8,7 +8,9 @@
 const logger = require('../utils/logger');
 
 class DocumentGenerator {
-  constructor(baseConfig = {}) {
+  constructor(config = {}) {
+    this.config = config;
+    this.apiPrefix = config.apiPrefix || '/api';
     this.baseConfig = {
       openapi: '3.0.0',
       info: {
@@ -30,8 +32,7 @@ class DocumentGenerator {
           url: 'http://localhost:8080',
           description: '开发服务器'
         }
-      ],
-      ...baseConfig
+      ]
     };
   }
 
@@ -75,7 +76,7 @@ class DocumentGenerator {
       
       // 处理OpenAPI格式的路径定义
       Object.entries(config.openapi.paths).forEach(([path, methods]) => {
-        const basePath = `/api/${config.info.category}/${config.info.name}`;
+        const basePath = `${this.apiPrefix}/${config.info.category}/${config.info.name}`;
         const fullPath = basePath + path;
         
         if (!paths[fullPath]) {

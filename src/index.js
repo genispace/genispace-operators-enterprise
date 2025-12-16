@@ -43,13 +43,13 @@ async function startApp() {
     await appService.initialize(operatorsDir);
     
     // 3. 设置基础路由
-    setupRoutes(app, appService);
+    setupRoutes(app, appService, config);
     
     // 4. 应用算子路由
     appService.applyTo(app);
     
     // 5. 设置API文档
-    setupApiDocs(app, appService);
+    setupApiDocs(app, appService, config);
     
     // 6. 设置错误处理（必须在所有路由之后）
     const { errorHandler, notFoundHandler } = require('./middleware/error');
@@ -69,8 +69,8 @@ async function startApp() {
         endpoints: stats.totalEndpoints
       });
       
-      logger.info(`📚 API 文档: http://${config.host}:${config.port}/api/docs`);
-      logger.info(`🔗 OpenAPI Schema: http://${config.host}:${config.port}/api/docs.json`);
+      logger.info(`📚 API 文档: http://${config.host}:${config.port}${config.apiPrefix}/docs`);
+      logger.info(`🔗 OpenAPI Schema: http://${config.host}:${config.port}${config.apiPrefix}/docs.json`);
       logger.info(`🏥 健康检查: http://${config.host}:${config.port}/health`);
     });
 
@@ -88,11 +88,12 @@ async function startApp() {
 /**
  * 设置API文档
  */
-function setupApiDocs(app, appService) {
+function setupApiDocs(app, appService, config) {
   const swaggerSpec = appService.getSwaggerSpec();
+  const apiPrefix = config.apiPrefix || '/api';
   
   // Swagger UI
-  app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+  app.use(`${apiPrefix}/docs`, swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
     customCss: '.swagger-ui .topbar { display: none }',
     customSiteTitle: 'GeniSpace Custom Operators API',
     swaggerOptions: {
@@ -104,7 +105,7 @@ function setupApiDocs(app, appService) {
   }));
 
   // Swagger JSON端点
-  app.get('/api/docs.json', (req, res) => {
+  app.get(`${apiPrefix}/docs.json`, (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');

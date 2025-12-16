@@ -10,10 +10,12 @@ const express = require('express');
  * 设置基础路由
  * @param {object} app - Express应用
  * @param {object} appService - 应用服务
+ * @param {object} config - 配置对象
  */
-function setupRoutes(app, appService) {
-  // 根路径 - 首页
-  app.get('/', (req, res) => {
+function setupRoutes(app, appService, config) {
+  const apiPrefix = config.apiPrefix || '/api';
+  // 首页 - 使用 apiPrefix
+  app.get(apiPrefix, (req, res) => {
     const stats = appService.getStats();
     const operators = appService.getOperators();
     const packageInfo = require('../../package.json');
@@ -165,8 +167,8 @@ function setupRoutes(app, appService) {
                             <span class="methods-count">${op.endpointCount} 个方法</span>
                         </div>
                         <div class="copy-url">
-                            <code>${baseUrl}/api/operators/${op.category}/${op.name}/definition</code>
-                            <button class="copy-btn" onclick="copyToClipboard('${baseUrl}/api/operators/${op.category}/${op.name}/definition', this)">复制</button>
+                            <code>${baseUrl}${apiPrefix}/operators/${op.category}/${op.name}/definition</code>
+                            <button class="copy-btn" onclick="copyToClipboard('${baseUrl}${apiPrefix}/operators/${op.category}/${op.name}/definition', this)">复制</button>
                         </div>
                     </div>
                 `).join('')}
@@ -177,14 +179,14 @@ function setupRoutes(app, appService) {
             <h2 class="section-title">🔗 常用API链接</h2>
             <div class="api-links">
                 <div class="copy-url">
-                    <code>${baseUrl}/api/docs</code>
-                    <button class="copy-btn" onclick="copyToClipboard('${baseUrl}/api/docs', this)">复制</button>
+                    <code>${baseUrl}${apiPrefix}/docs</code>
+                    <button class="copy-btn" onclick="copyToClipboard('${baseUrl}${apiPrefix}/docs', this)">复制</button>
                 </div>
                 <div style="margin: 5px 0; color: #64748b;">Swagger API 文档</div>
                 
                 <div class="copy-url">
-                    <code>${baseUrl}/api/operators</code>
-                    <button class="copy-btn" onclick="copyToClipboard('${baseUrl}/api/operators', this)">复制</button>
+                    <code>${baseUrl}${apiPrefix}/operators</code>
+                    <button class="copy-btn" onclick="copyToClipboard('${baseUrl}${apiPrefix}/operators', this)">复制</button>
                 </div>
                 <div style="margin: 5px 0; color: #64748b;">算子列表 API</div>
                 
@@ -244,7 +246,7 @@ function setupRoutes(app, appService) {
   });
 
   // 算子列表API
-  app.get('/api/operators', (req, res) => {
+  app.get(`${apiPrefix}/operators`, (req, res) => {
     const operators = appService.getOperators();
     const stats = appService.getStats();
     
@@ -261,7 +263,7 @@ function setupRoutes(app, appService) {
 
 
   // 获取单个算子的完整定义（用于导出和导入）
-  app.get('/api/operators/:category/:name/definition', (req, res) => {
+  app.get(`${apiPrefix}/operators/:category/:name/definition`, (req, res) => {
     try {
       const { category, name } = req.params;
       const operatorId = `${category}/${name}`;
@@ -290,7 +292,7 @@ function setupRoutes(app, appService) {
   });
 
   // 按分类获取算子
-  app.get('/api/operators/:category', (req, res) => {
+  app.get(`${apiPrefix}/operators/:category`, (req, res) => {
     const { category } = req.params;
     const operators = appService.getOperatorsByCategory(category);
     
@@ -313,7 +315,7 @@ function setupRoutes(app, appService) {
   });
 
   // 算子统计信息
-  app.get('/api/stats', (req, res) => {
+  app.get(`${apiPrefix}/stats`, (req, res) => {
     const stats = appService.getStats();
     
     res.json({
