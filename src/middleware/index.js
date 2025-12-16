@@ -74,7 +74,8 @@ function setupMiddlewares(app, config) {
   // 5. 速率限制
   if (config.security.enableRateLimit) {
     const limiter = createRateLimiter(config.rateLimit);
-    app.use('/api/', limiter);
+    const apiPrefix = config.apiPrefix || '/api';
+    app.use(`${apiPrefix}/`, limiter);
   }
 
   // 6. 请求日志

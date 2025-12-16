@@ -46,12 +46,12 @@ Authorization: GeniSpace <your-api-key>
 ### 公共接口
 
 以下接口无需认证即可访问：
-- \`/\` - 首页
+- \`${config.apiPrefix}\` - 首页
 - \`/health\` - 健康检查
-- \`/api/docs\` - API 文档
-- \`/api/docs.json\` - API 文档 JSON
-- \`/api/operators\` - 算子列表
-- \`/api/operators/:category/:operator/definition\` - 算子定义文件
+- \`${config.apiPrefix}/docs\` - API 文档
+- \`${config.apiPrefix}/docs.json\` - API 文档 JSON
+- \`${config.apiPrefix}/operators\` - 算子列表
+- \`${config.apiPrefix}/operators/:category/:operator/definition\` - 算子定义文件
 
 ## 错误处理
 
@@ -263,7 +263,7 @@ Authorization: GeniSpace <your-api-key>
               type: 'array',
               items: { type: 'string' },
               description: 'API端点列表',
-              example: ['/api/text-processing/string-utils/format']
+              example: [`${config.apiPrefix}/text-processing/string-utils/format`]
             }
           }
         },
