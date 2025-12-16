@@ -205,7 +205,7 @@ function auth() {
       
       // 公开路径
       const publicPaths = [
-        '/',
+        apiPrefix,
         '/health',
         `${apiPrefix}/docs`,
         `${apiPrefix}/docs.json`,
