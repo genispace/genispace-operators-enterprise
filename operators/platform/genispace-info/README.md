@@ -158,7 +158,6 @@ curl -X POST http://localhost:8080/api/platform/genispace-info/agents \
 GeniSpace 平台信息算子需要以下环境变量配置：
 
 #### GeniSpace 认证配置
-- `GENISPACE_AUTH_ENABLED`: 是否启用 GeniSpace 认证（默认：`false`）
 - `GENISPACE_API_BASE_URL`: GeniSpace API 基础URL（默认：`https://api.genispace.com`）
 
 #### 服务器配置
@@ -299,7 +298,7 @@ get_agents()
 
 1. **认证失败 (401)**
    - 检查 API Key 是否正确
-   - 确认 `GENISPACE_AUTH_ENABLED` 配置是否正确
+   - 确认 `GENISPACE_API_BASE_URL` 配置是否正确
    - 验证 API Key 是否有效且未过期
 
 2. **SDK 调用失败**

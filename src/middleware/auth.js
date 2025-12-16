@@ -7,10 +7,10 @@
  * - GeniSpace: <api_key>
  * 
  * 使用说明：
- * 1. 设置环境变量 GENISPACE_AUTH_ENABLED=true 启用认证
- * 2. API类型算子在运行配置中启用"GeniSpace认证"选项
- * 3. 算子执行时会自动传递System API Key用于身份验证
- * 4. 验证成功后可通过 req.genispace 获取用户信息和API Key信息
+ * 1. API类型算子在运行配置中启用"GeniSpace认证"选项
+ * 2. 算子执行时会自动传递System API Key用于身份验证
+ * 3. 验证成功后可通过 req.genispace 获取用户信息和API Key信息
+ * 4. 需要认证的算子需要自己调用 checkAuth() 方法进行验证
  * 
  * 示例：
  * ```javascript
