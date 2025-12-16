@@ -66,7 +66,6 @@ const config = {
   // GeniSpace API KEY 认证配置
   genispace: {
     auth: {
-      enabled: process.env.GENISPACE_AUTH_ENABLED === 'true',
       baseUrl: process.env.GENISPACE_API_BASE_URL || 'https://api.genispace.com',
       timeout: parseInt(process.env.GENISPACE_AUTH_TIMEOUT) || 10000,
       cacheTTL: parseInt(process.env.GENISPACE_AUTH_CACHE_TTL) || 300 // 5分钟缓存
