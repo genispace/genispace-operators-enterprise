@@ -119,8 +119,7 @@ NODE_ENV=production
 # PDF Generator Configuration  
 # Note: Files are automatically uploaded to GeniSpace platform storage via SDK
 
-# GeniSpace Authentication (Optional)
-GENISPACE_AUTH_ENABLED=false
+# GeniSpace Authentication Configuration
 GENISPACE_API_BASE_URL=https://api.genispace.com
 ```
 
@@ -137,8 +136,8 @@ docker-compose up -d
 
 ### Production Considerations
 
-- ✅ Enable `GENISPACE_AUTH_ENABLED=true` for security
 - ✅ Files are automatically uploaded to GeniSpace platform storage via SDK
+- ✅ Operators that require authentication should call `checkAuth()` method
 - ✅ Monitor temporary directory disk usage
 
 ## 🤝 Contributing to Enterprise Operators

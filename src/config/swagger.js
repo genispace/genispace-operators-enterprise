@@ -37,7 +37,7 @@ GeniSpace AI 平台的轻量级自定义算子组件库 API
 
 ### GeniSpace 平台认证
 
-当启用认证时（环境变量 \`GENISPACE_AUTH_ENABLED=true\`），需要提供有效的 GeniSpace API Key：
+需要认证的算子需要提供有效的 GeniSpace API Key：
 
 \`\`\`
 Authorization: GeniSpace <your-api-key>

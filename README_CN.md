@@ -119,8 +119,7 @@ NODE_ENV=production
 # PDF生成器配置  
 # 注意：文件会自动通过 SDK 上传到 GeniSpace 平台存储
 
-# GeniSpace认证（可选）
-GENISPACE_AUTH_ENABLED=false
+# GeniSpace认证配置
 GENISPACE_API_BASE_URL=https://api.genispace.com
 ```
 
@@ -137,8 +136,8 @@ docker-compose up -d
 
 ### 生产环境注意事项
 
-- ✅ 启用 `GENISPACE_AUTH_ENABLED=true` 确保安全性
 - ✅ 文件会自动通过 SDK 上传到 GeniSpace 平台存储
+- ✅ 需要认证的算子需要自己调用 `checkAuth()` 方法进行验证
 - ✅ 监控临时目录磁盘使用情况
 
 ## 🤝 贡献企业算子
