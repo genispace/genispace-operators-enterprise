@@ -370,24 +370,71 @@ class PDFGenerator {
    * @returns {string} - HTML 内容
    */
   convertMarkdownToHTML(markdown, customCSS = '') {
-    // 配置 marked（使用新的 API）
-    marked.use({
-      renderer: {
-        code(code, language) {
+    // 创建自定义渲染器（兼容 marked v16+）
+    const renderer = new marked.Renderer();
+    
+    // 自定义代码块渲染器
+    renderer.code = (code, language) => {
           // 代码高亮处理
           const lang = language || 'text';
-          return `<pre><code class="language-${lang}">${this.options.sanitize ? marked.utils.escape(code) : code}</code></pre>`;
-        },
-        table(header, body) {
-          return `<div class="table-container"><table><thead>${header}</thead><tbody>${body}</tbody></table></div>`;
-        }
-      },
-      breaks: true,
-      gfm: true
-    });
+      return `<pre><code class="language-${lang}">${marked.escape(code)}</code></pre>`;
+    };
     
-    const htmlBody = marked.parse(markdown);
+    // 自定义表格渲染器 - marked v16+ API
+    renderer.table = (header, body) => {
+      // header现在是整个表格对象，body在rows中
+      if (header && header.rows) {
+        // 生成表头
+        let thead = '<tr>';
+        header.rows[0].forEach(cell => {
+          const cellContent = this.parseTokens(cell.tokens);
+          const align = cell.align ? `style="text-align: ${cell.align};"` : '';
+          thead += `<th ${align}>${cellContent}</th>`;
+        });
+        thead += '</tr>';
+        
+        // 生成表体
+        let tbody = '';
+        for (let i = 1; i < header.rows.length; i++) {
+          tbody += '<tr>';
+          header.rows[i].forEach(cell => {
+            const cellContent = this.parseTokens(cell.tokens);
+            const align = cell.align ? `style="text-align: ${cell.align};"` : '';
+            tbody += `<td ${align}>${cellContent}</td>`;
+          });
+          tbody += '</tr>';
+        }
+        
+        return `<div class="table-container"><table><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`;
+        }
+      
+      // 后备方案：使用默认渲染器
+      return marked.Renderer.prototype.table.call(this, header, body);
+    };
+    
+    // 配置 marked 选项 - 使用默认渲染器以确保兼容性
+    const markedOptions = {
+      breaks: true,
+      gfm: true,
+      // 暂时使用默认渲染器，确保表格功能正常
+      // renderer: renderer
+    };
+    
+    const htmlBody = marked.parse(markdown, markedOptions);
     const cssStyles = this.config.defaultCssStyles + '\n' + (customCSS || '');
+    
+    // 添加表格容器的CSS样式
+    const tableCSS = `
+      .table-container {
+        overflow-x: auto;
+        margin: 1em 0;
+      }
+      .table-container table {
+        border-collapse: collapse;
+        width: 100%;
+        display: table;
+      }
+    `;
     
     return `
       <!DOCTYPE html>
@@ -396,13 +443,41 @@ class PDFGenerator {
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Generated PDF</title>
-        <style>${cssStyles}</style>
+        <style>${cssStyles}\n${tableCSS}</style>
       </head>
       <body>
         ${htmlBody}
       </body>
       </html>
     `;
+  }
+  
+  /**
+   * 解析tokens为HTML字符串
+   * @param {Array} tokens - marked tokens数组
+   * @returns {string} - HTML字符串
+   */
+  parseTokens(tokens) {
+    if (!tokens || !Array.isArray(tokens)) {
+      return '';
+    }
+    
+    return tokens.map(token => {
+      switch (token.type) {
+        case 'text':
+          return token.text;
+        case 'strong':
+          return `<strong>${this.parseTokens(token.tokens)}</strong>`;
+        case 'em':
+          return `<em>${this.parseTokens(token.tokens)}</em>`;
+        case 'code':
+          return `<code>${marked.escape(token.text)}</code>`;
+        case 'link':
+          return `<a href="${token.href}" target="_blank">${this.parseTokens(token.tokens)}</a>`;
+        default:
+          return token.text || '';
+      }
+    }).join('');
   }
   
   /**
