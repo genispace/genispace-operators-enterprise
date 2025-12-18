@@ -201,67 +201,138 @@ class WordGenerator {
   }
   
   /**
+   * HTML 转义函数
+   * @param {string} text - 要转义的文本
+   * @returns {string} - 转义后的文本
+   */
+  escapeHtml(text) {
+    if (!text) return '';
+    return String(text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  /**
+   * 解析 tokens 为 HTML 内容
+   * @param {Array} tokens - token 数组
+   * @returns {string} - HTML 内容
+   */
+  parseTokens(tokens) {
+    if (!tokens || tokens.length === 0) {
+      return '';
+    }
+    
+    return tokens.map(token => {
+      if (token.type === 'text') {
+        return this.escapeHtml(token.text || '');
+      } else if (token.type === 'strong') {
+        const text = this.parseTokens(token.tokens || []);
+        return `<strong>${text}</strong>`;
+      } else if (token.type === 'em') {
+        const text = this.parseTokens(token.tokens || []);
+        return `<em>${text}</em>`;
+      } else if (token.type === 'codespan') {
+        return `<code>${this.escapeHtml(token.text || '')}</code>`;
+      } else if (token.type === 'link') {
+        const text = this.parseTokens(token.tokens || []);
+        return `<a href="${this.escapeHtml(token.href || '')}">${text}</a>`;
+      } else if (token.type === 'html') {
+        return token.text || '';
+      }
+      return this.escapeHtml(token.text || '');
+    }).join('');
+  }
+
+  /**
    * 转换 Markdown 为 HTML
    * @param {string} markdown - Markdown 内容
    * @param {string} customCSS - 自定义 CSS 样式
    * @returns {string} - HTML 内容
    */
   convertMarkdownToHTML(markdown, customCSS = '') {
-    marked.use({
-      renderer: {
-        code(code, language) {
-          const lang = language || 'text';
-          return `<pre><code class="language-${lang}">${this.options.sanitize ? marked.utils.escape(code) : code}</code></pre>`;
-        },
-        table(header, body) {
-          return `<div class="table-container"><table><thead>${header}</thead><tbody>${body}</tbody></table></div>`;
-        }
-      },
-      breaks: true,
-      gfm: true
-    });
+ // 创建自定义渲染器（兼容 marked v16+）
+ const renderer = new marked.Renderer();
     
-    const htmlBody = marked.parse(markdown);
-    const defaultCSS = `
-      body { 
-        font-family: 'Microsoft YaHei', 'SimSun', Arial, sans-serif;
-        line-height: 1.6;
-        color: #333;
-        font-size: 12pt;
-      }
-      h1, h2, h3, h4, h5, h6 { 
-        color: #2c3e50;
-        margin-top: 1.5em;
-        margin-bottom: 0.5em;
-      }
-      h1 { font-size: 24pt; }
-      h2 { font-size: 18pt; }
-      h3 { font-size: 14pt; }
-      table { border-collapse: collapse; width: 100%; margin: 1em 0; }
-      th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-      th { background-color: #f2f2f2; font-weight: bold; }
-      code { background-color: #f4f4f4; padding: 2px 4px; }
-      pre { background-color: #f4f4f4; padding: 1em; overflow-x: auto; }
-      blockquote { border-left: 4px solid #3498db; margin: 1em 0; padding-left: 1em; color: #666; }
-      img { max-width: 100%; height: auto; }
-    `;
-    
-    const cssStyles = customCSS ? `${defaultCSS}\n${customCSS}` : defaultCSS;
-    
-    return `
-      <!DOCTYPE html>
-      <html lang="zh-CN">
-      <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Generated Word</title>
-        <style>${cssStyles}</style>
-      </head>
-      <body>
-        ${htmlBody}
-      </body>
-      </html>
-    `;
+ // 自定义代码块渲染器
+ renderer.code = (code, language) => {
+       // 代码高亮处理
+       const lang = language || 'text';
+   return `<pre><code class="language-${lang}">${marked.escape(code)}</code></pre>`;
+ };
+ 
+ // 自定义表格渲染器 - marked v16+ API
+ renderer.table = (header, body) => {
+   // header现在是整个表格对象，body在rows中
+   if (header && header.rows) {
+     // 生成表头
+     let thead = '<tr>';
+     header.rows[0].forEach(cell => {
+       const cellContent = this.parseTokens(cell.tokens);
+       const align = cell.align ? `style="text-align: ${cell.align};"` : '';
+       thead += `<th ${align}>${cellContent}</th>`;
+     });
+     thead += '</tr>';
+     
+     // 生成表体
+     let tbody = '';
+     for (let i = 1; i < header.rows.length; i++) {
+       tbody += '<tr>';
+       header.rows[i].forEach(cell => {
+         const cellContent = this.parseTokens(cell.tokens);
+         const align = cell.align ? `style="text-align: ${cell.align};"` : '';
+         tbody += `<td ${align}>${cellContent}</td>`;
+       });
+       tbody += '</tr>';
+     }
+     
+     return `<div class="table-container"><table><thead>${thead}</thead><tbody>${tbody}</tbody></table></div>`;
+     }
+   
+   // 后备方案：使用默认渲染器
+   return marked.Renderer.prototype.table.call(this, header, body);
+ };
+ 
+ // 配置 marked 选项 - 使用默认渲染器以确保兼容性
+ const markedOptions = {
+   breaks: true,
+   gfm: true,
+   // 暂时使用默认渲染器，确保表格功能正常
+   // renderer: renderer
+ };
+ 
+ const htmlBody = marked.parse(markdown, markedOptions);
+ const cssStyles = this.config.defaultCssStyles + '\n' + (customCSS || '');
+ 
+ // 添加表格容器的CSS样式
+ const tableCSS = `
+   .table-container {
+     overflow-x: auto;
+     margin: 1em 0;
+   }
+   .table-container table {
+     border-collapse: collapse;
+     width: 100%;
+     display: table;
+   }
+ `;
+ 
+ return `
+   <!DOCTYPE html>
+   <html lang="zh-CN">
+   <head>
+     <meta charset="UTF-8">
+     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+     <title>Generated PDF</title>
+     <style>${cssStyles}\n${tableCSS}</style>
+   </head>
+   <body>
+     ${htmlBody}
+   </body>
+   </html>
+ `;
   }
 
   /**
@@ -608,15 +679,27 @@ class WordGenerator {
     const cellMatches = trHtml.match(/<(td|th)[^>]*>([\s\S]*?)<\/\1>/gi) || [];
     
     cellMatches.forEach(cellHtml => {
-      let cellText = cellHtml.replace(/<[^>]*>/g, '');
-      cellText = this.decodeHTMLEntities(cellText).trim();
+      // 提取单元格内容（保留br标签用于换行）
+      const contentMatch = cellHtml.match(/<(td|th)[^>]*>([\s\S]*?)<\/\1>/i);
+      const cellContent = contentMatch ? contentMatch[2] : '';
+      
+      // 解析HTML内容为TextRun数组（处理br标签）
+      const textRuns = this.parseHTMLContentToTextRuns(cellContent);
+      
+      // 如果是表头，所有TextRun都设为粗体
+      if (isHeader) {
+        textRuns.forEach(tr => {
+          if (tr.options) {
+            tr.options.bold = true;
+          } else {
+            tr.bold = true;
+          }
+        });
+      }
       
       cells.push(new TableCell({
         children: [new Paragraph({
-          children: [new TextRun({
-            text: cellText,
-            bold: isHeader
-          })]
+          children: textRuns
         })],
         shading: isHeader ? {
           type: ShadingType.SOLID,
@@ -640,12 +723,14 @@ class WordGenerator {
     const processedRanges = [];
     let tableIndex = 0;
     
-    // 匹配被div包裹的表格
-    const wrappedTableRegex = /<div[^>]*class=["']table-container["'][^>]*>[\s\S]*?<table[^>]*>([\s\S]*?)<\/table>[\s\S]*?<\/div>/gi;
+    // 匹配被div包裹的表格（使用更精确的正则表达式）
+    const wrappedTableRegex = /<div[^>]*class\s*=\s*["']table-container["'][^>]*>\s*<table[^>]*>([\s\S]*?)<\/table>\s*<\/div>/gi;
     let wrappedMatch;
     
     while ((wrappedMatch = wrappedTableRegex.exec(htmlContent)) !== null) {
-      const tableMatch = wrappedMatch[0].match(/<table[^>]*>([\s\S]*?)<\/table>/is);
+      // 提取完整的table标签及其内容
+      const fullMatch = wrappedMatch[0];
+      const tableMatch = fullMatch.match(/<table[^>]*>([\s\S]*?)<\/table>/is);
       if (tableMatch) {
         const placeholder = `__TABLE_PLACEHOLDER_${tableIndex}__`;
         tablePlaceholders.push({
@@ -653,20 +738,20 @@ class WordGenerator {
           tableHtml: tableMatch[0]
         });
         replacements.push({
-          original: wrappedMatch[0],
+          original: fullMatch,
           placeholder: placeholder,
           start: wrappedMatch.index,
-          end: wrappedMatch.index + wrappedMatch[0].length
+          end: wrappedMatch.index + fullMatch.length
         });
         processedRanges.push({
           start: wrappedMatch.index,
-          end: wrappedMatch.index + wrappedMatch[0].length
+          end: wrappedMatch.index + fullMatch.length
         });
         tableIndex++;
       }
     }
     
-    // 匹配直接的表格式
+    // 匹配直接的表格式（不在已处理范围内的）
     const tableRegex = /<table[^>]*>([\s\S]*?)<\/table>/gis;
     let tableMatch;
     
@@ -684,6 +769,10 @@ class WordGenerator {
         replacements.push({
           original: tableMatch[0],
           placeholder: placeholder,
+          start: tableMatch.index,
+          end: tableMatch.index + tableMatch[0].length
+        });
+        processedRanges.push({
           start: tableMatch.index,
           end: tableMatch.index + tableMatch[0].length
         });
@@ -723,6 +812,276 @@ class WordGenerator {
   }
 
   /**
+   * 解析HTML内容为TextRun数组（处理br、strong、em等标签）
+   * @param {string} htmlContent - HTML内容
+   * @returns {Array} - TextRun数组
+   */
+  parseHTMLContentToTextRuns(htmlContent) {
+    if (!htmlContent) return [new TextRun('')];
+    
+    // 将 <br/> 和 <br> 标签替换为特殊标记
+    let processed = htmlContent.replace(/<br\s*\/?>/gi, '\n__BR__\n');
+    
+    // 递归解析HTML节点，处理内联格式
+    const parseInlineContent = (html, options = {}) => {
+      if (!html) return [];
+      
+      const runs = [];
+      let currentIndex = 0;
+      
+      // 按顺序查找所有内联标签（strong, em, code等）
+      const inlineTagRegex = /<(strong|em|code|a)[^>]*>([\s\S]*?)<\/\1>/gi;
+      let match;
+      const matches = [];
+      
+      // 重置正则表达式的lastIndex，确保从头开始匹配
+      inlineTagRegex.lastIndex = 0;
+      while ((match = inlineTagRegex.exec(html)) !== null) {
+        matches.push({
+          index: match.index,
+          length: match[0].length,
+          tag: match[1].toLowerCase(),
+          content: match[2],
+          fullMatch: match[0]
+        });
+      }
+      
+      // 按索引排序
+      matches.sort((a, b) => a.index - b.index);
+      
+      // 处理每个匹配
+      matches.forEach(match => {
+        // 处理匹配前的文本
+        if (match.index > currentIndex) {
+          const beforeText = html.substring(currentIndex, match.index);
+          // 移除HTML标签，但保留文本内容
+          const cleanText = beforeText.replace(/<[^>]*>/g, '');
+          if (cleanText) {
+            const decoded = this.decodeHTMLEntities(cleanText);
+            // 不要使用 trim()，保留所有文本内容
+            // 确保创建 TextRun，即使 decoded 是空字符串
+            if (decoded !== undefined && decoded !== null) {
+              runs.push(new TextRun({
+                text: decoded,
+                bold: options.bold,
+                italics: options.italics
+              }));
+            } else if (cleanText) {
+              runs.push(new TextRun({
+                text: cleanText,
+                bold: options.bold,
+                italics: options.italics
+              }));
+            }
+          }
+        }
+        
+        // 处理匹配的标签内容
+        const nestedOptions = { ...options };
+        if (match.tag === 'strong') {
+          nestedOptions.bold = true;
+        } else if (match.tag === 'em') {
+          nestedOptions.italics = true;
+        }
+        
+        // 递归处理标签内的内容（纯文本，不包含HTML标签）
+        const nestedContent = match.content;
+        if (nestedContent) {
+          // 移除可能的HTML标签（虽然理论上不应该有）
+          const cleanNestedContent = nestedContent.replace(/<[^>]*>/g, '');
+          const decodedNestedContent = this.decodeHTMLEntities(cleanNestedContent);
+          if (decodedNestedContent !== undefined && decodedNestedContent !== null) {
+            runs.push(new TextRun({
+              text: decodedNestedContent,
+              bold: nestedOptions.bold,
+              italics: nestedOptions.italics
+            }));
+          } else if (cleanNestedContent) {
+            runs.push(new TextRun({
+              text: cleanNestedContent,
+              bold: nestedOptions.bold,
+              italics: nestedOptions.italics
+            }));
+          }
+        }
+        
+        currentIndex = match.index + match.length;
+      });
+      
+      // 处理剩余文本
+      if (currentIndex < html.length) {
+        const remainingText = html.substring(currentIndex);
+        // 移除HTML标签，但保留文本内容
+        const cleanText = remainingText.replace(/<[^>]*>/g, '');
+        
+        // 直接处理，不检查 cleanText 是否为空（因为可能包含空格等）
+        const decoded = this.decodeHTMLEntities(cleanText);
+        
+        // 确保创建 TextRun，即使 decoded 是空字符串
+        // 只有当 decoded 是 undefined 或 null 时，才考虑其他选项
+        if (decoded !== undefined && decoded !== null) {
+          // 对于非 undefined/null 的值（包括空字符串），直接使用 decoded
+          runs.push(new TextRun({
+            text: decoded,
+            bold: options.bold,
+            italics: options.italics
+          }));
+        } else if (cleanText) {
+          // 如果 decoded 是 undefined 或 null，使用 cleanText
+          runs.push(new TextRun({
+            text: cleanText,
+            bold: options.bold,
+            italics: options.italics
+          }));
+        } else if (remainingText) {
+          // 如果 cleanText 也是空的，尝试处理原始 remainingText
+          const decodedRemaining = this.decodeHTMLEntities(remainingText);
+          if (decodedRemaining !== undefined && decodedRemaining !== null) {
+            runs.push(new TextRun({
+              text: decodedRemaining,
+              bold: options.bold,
+              italics: options.italics
+            }));
+          } else if (remainingText) {
+            runs.push(new TextRun({
+              text: remainingText,
+              bold: options.bold,
+              italics: options.italics
+            }));
+          }
+        } else {
+          // 最后的保障，确保至少创建一个空的 TextRun
+          runs.push(new TextRun({
+            text: '',
+            bold: options.bold,
+            italics: options.italics
+          }));
+        }
+      } else if (matches.length === 0) {
+        // 如果没有匹配到任何标签，但有内容，直接处理整个html
+        const cleanText = html.replace(/<[^>]*>/g, '');
+        const decoded = this.decodeHTMLEntities(cleanText);
+        if (decoded !== undefined && decoded !== null) {
+          runs.push(new TextRun({
+            text: decoded,
+            bold: options.bold,
+            italics: options.italics
+          }));
+        } else if (cleanText) {
+          runs.push(new TextRun({
+            text: cleanText,
+            bold: options.bold,
+            italics: options.italics
+          }));
+        }
+      }
+      
+      // 如果没有匹配到任何标签，且没有生成任何runs，说明整个html就是纯文本
+      // 这种情况可能发生在：html中没有内联标签，且currentIndex为0但上面的处理没有生成runs
+      // 或者 cleanText 是空字符串导致上面的处理没有生成runs
+      if (matches.length === 0 && runs.length === 0) {
+        // 直接处理整个html作为纯文本
+        const cleanText = html.replace(/<[^>]*>/g, '');
+        const decoded = this.decodeHTMLEntities(cleanText);
+        // 即使 decoded 是空字符串，也创建一个 TextRun，避免返回空数组
+        if (decoded !== undefined && decoded !== null) {
+          runs.push(new TextRun({
+            text: decoded,
+            bold: options.bold,
+            italics: options.italics
+          }));
+        } else if (cleanText) {
+          runs.push(new TextRun({
+            text: cleanText,
+            bold: options.bold,
+            italics: options.italics
+          }));
+        }
+      }
+      
+      // 如果仍然没有runs（理论上不应该到达这里，但作为最后的保障）
+      if (runs.length === 0) {
+        const cleanText = html.replace(/<[^>]*>/g, '');
+        const decoded = this.decodeHTMLEntities(cleanText);
+        if (decoded !== undefined && decoded !== null) {
+          runs.push(new TextRun({
+            text: decoded,
+            bold: options.bold,
+            italics: options.italics
+          }));
+        } else if (cleanText) {
+          runs.push(new TextRun({
+            text: cleanText,
+            bold: options.bold,
+            italics: options.italics
+          }));
+        } else {
+          // 最后的保障，添加空字符串避免返回空数组
+          runs.push(new TextRun({
+            text: '',
+            bold: options.bold,
+            italics: options.italics
+          }));
+        }
+      }
+      
+      return runs;
+    };
+    
+    // 按换行标记分割内容
+    const parts = processed.split('\n__BR__\n');
+    const allRuns = [];
+    
+    parts.forEach((part, index) => {
+      // 解析每个部分的内联内容
+      const partRuns = parseInlineContent(part);
+      allRuns.push(...partRuns);
+      
+      // 如果不是最后一部分，添加换行
+      if (index < parts.length - 1) {
+        allRuns.push(new TextRun({ text: '', break: 1 }));
+      }
+    });
+    
+    // 如果没有解析到任何内容，至少返回一个包含原始文本的 TextRun
+    if (allRuns.length === 0) {
+      let cleanText = processed.replace(/<[^>]*>/g, '');
+      cleanText = this.decodeHTMLEntities(cleanText);
+      // 移除换行标记
+      cleanText = cleanText.replace(/\n__BR__\n/g, '\n');
+      // 即使 cleanText 是空字符串，也返回一个 TextRun，避免返回空数组
+      if (cleanText) {
+        return [new TextRun(cleanText)];
+      }
+      // 如果 cleanText 是空字符串，尝试从原始 htmlContent 中提取
+      const originalCleanText = htmlContent.replace(/<[^>]*>/g, '');
+      const originalDecoded = this.decodeHTMLEntities(originalCleanText);
+      return [new TextRun(originalDecoded || '')];
+    }
+    
+    // 检查 allRuns 中是否有空的 TextRun，如果有，尝试填充内容
+    const hasEmptyRuns = allRuns.some(run => !run.text || run.text.trim() === '');
+    if (hasEmptyRuns && allRuns.length > 0) {
+      // 如果所有 TextRun 都是空的，尝试从原始内容中提取
+      const allEmpty = allRuns.every(run => !run.text || run.text.trim() === '');
+      if (allEmpty) {
+        let cleanText = processed.replace(/<[^>]*>/g, '');
+        cleanText = this.decodeHTMLEntities(cleanText);
+        cleanText = cleanText.replace(/\n__BR__\n/g, '\n');
+        if (cleanText) {
+          return [new TextRun(cleanText)];
+        }
+        // 如果 cleanText 还是空的，尝试从原始 htmlContent 中提取
+        const originalCleanText = htmlContent.replace(/<[^>]*>/g, '');
+        const originalDecoded = this.decodeHTMLEntities(originalCleanText);
+        return [new TextRun(originalDecoded || '')];
+      }
+    }
+    
+    return allRuns;
+  }
+
+  /**
    * 解析HTML块级元素
    * @param {string} tagName - 标签名
    * @param {string} content - 内容
@@ -739,9 +1098,12 @@ class WordGenerator {
       
       const bookmarkId = `_Toc${context.bookmarkCounter.toString().padStart(5, '0')}`;
       
+      // 提取纯文本用于标题
+      const textContent = content.replace(/<[^>]*>/g, '').trim();
+      
       context.headings.push({
         level,
-        text: content,
+        text: textContent,
         bookmark: bookmarkId
       });
       
@@ -749,7 +1111,7 @@ class WordGenerator {
         children: [
           new BookmarkStart(bookmarkId, context.linkIdCounter),
           new TextRun({
-            text: content,
+            text: textContent,
             bold: true
           }),
           new BookmarkEnd(bookmarkId)
@@ -765,16 +1127,18 @@ class WordGenerator {
     }
     
     if (tagName === 'p' || tagName === 'div') {
+      const textRuns = this.parseHTMLContentToTextRuns(content);
       return new Paragraph({
-        children: [new TextRun(content)],
+        children: textRuns,
         spacing: { after: 200 }
       });
     }
     
     if (tagName === 'pre') {
+      const textContent = content.replace(/<[^>]*>/g, '').trim();
       return new Paragraph({
         children: [new TextRun({
-          text: content,
+          text: textContent,
           font: 'Courier New'
         })],
         spacing: { after: 200 }
@@ -789,8 +1153,61 @@ class WordGenerator {
     }
     
     if (tagName === 'li') {
+      // 使用 parseHTMLContentToTextRuns 来处理内容，保留格式（如加粗）
+      const textRuns = this.parseHTMLContentToTextRuns(content);
+      
+      // 如果 textRuns 为空或所有 TextRun 的 text 都是空的，尝试直接处理内容
+      if (textRuns.length === 0 || textRuns.every(run => !run.text || run.text.trim() === '')) {
+        // 直接处理纯文本内容
+        const cleanText = content.replace(/<[^>]*>/g, '');
+        const decoded = this.decodeHTMLEntities(cleanText);
+        if (decoded !== undefined && decoded !== null) {
+          return new Paragraph({
+            children: [new TextRun(`• ${decoded}`)],
+            spacing: { after: 100 },
+            indent: { left: 720 }
+          });
+        } else if (cleanText) {
+          return new Paragraph({
+            children: [new TextRun(`• ${cleanText}`)],
+            spacing: { after: 100 },
+            indent: { left: 720 }
+          });
+        }
+      }
+      
+      // 在第一个 TextRun 前添加项目符号
+      if (textRuns.length > 0 && textRuns[0] instanceof TextRun) {
+        const firstRun = textRuns[0];
+        // 如果第一个 TextRun 的 text 是空的，直接设置文本
+        if (!firstRun.text || firstRun.text.trim() === '') {
+          // 如果第一个 TextRun 是空的，尝试从 content 中提取文本
+          const cleanText = content.replace(/<[^>]*>/g, '');
+          const decoded = this.decodeHTMLEntities(cleanText);
+          textRuns[0] = new TextRun({
+            text: `• ${decoded !== undefined && decoded !== null ? decoded : ''}`,
+            bold: firstRun.bold,
+            italics: firstRun.italics
+          });
+        } else {
+          textRuns[0] = new TextRun({
+            text: `• ${firstRun.text}`,
+            bold: firstRun.bold,
+            italics: firstRun.italics,
+            break: firstRun.break
+          });
+        }
+      } else if (textRuns.length === 0) {
+        // 如果 textRuns 是空的，直接处理内容
+        const cleanText = content.replace(/<[^>]*>/g, '');
+        const decoded = this.decodeHTMLEntities(cleanText);
+        textRuns.push(new TextRun(`• ${decoded !== undefined && decoded !== null ? decoded : ''}`));
+      } else {
+        textRuns.unshift(new TextRun('• '));
+      }
+      
       return new Paragraph({
-        children: [new TextRun(`• ${content}`)],
+        children: textRuns,
         spacing: { after: 100 },
         indent: { left: 720 }
       });
@@ -825,7 +1242,8 @@ class WordGenerator {
     const { processedHtml, tablePlaceholders } = this.extractAndReplaceTables(bodyContent);
     
     // 解析块级元素
-    const blockRegex = /<(h[1-6]|p|div|li|ul|ol|blockquote|pre|hr)[^>]*>([\s\S]*?)<\/\1>|__TABLE_MARKER_\d+__/gi;
+    // 注意：不直接匹配 ul 和 ol，而是匹配其中的 li，避免重复处理
+    const blockRegex = /<(h[1-6]|p|div|li|blockquote|pre|hr)[^>]*>([\s\S]*?)<\/\1>|__TABLE_MARKER_\d+__/gi;
     let match;
     let lastIndex = 0;
     
@@ -870,7 +1288,8 @@ class WordGenerator {
       if (tagMatch) {
         const tagName = tagMatch[1].toLowerCase();
         const contentMatch = matchedContent.match(/<[^>]*>([\s\S]*?)<\/[^>]+>/);
-        const content = contentMatch ? contentMatch[1].replace(/<[^>]*>/g, '').trim() : '';
+        // 保留原始内容，不在这里移除HTML标签，让parseBlockElement处理
+        const content = contentMatch ? contentMatch[1] : '';
         
         const paragraph = this.parseBlockElement(tagName, content, context);
         if (paragraph) {
