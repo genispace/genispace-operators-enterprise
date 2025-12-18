@@ -20,10 +20,8 @@ function setupRoutes(app, appService, config) {
     const operators = appService.getOperators();
     const packageInfo = require('../../package.json');
     
-    // 构建基础URL
-    const protocol = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
-    const host = req.headers['x-forwarded-host'] || req.headers.host || `${process.env.HOST || 'localhost'}:${process.env.PORT || 8080}`;
-    const baseUrl = `${protocol}://${host}`;
+    // 使用配置中的 getServiceBaseUrl 获取基础URL
+    const baseUrl = config.getServiceBaseUrl();
     
     // 生成HTML首页
     const html = `
