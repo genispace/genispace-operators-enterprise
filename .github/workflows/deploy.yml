@@ -5,6 +5,9 @@ on:
     branches:
       - main
       - latest
+      - release/**
+    tags:
+      - 'v*.*.*'  # 版本tag，如 v1.0.0
   workflow_dispatch:
     inputs:
       environment:
@@ -54,25 +57,50 @@ jobs:
         id: repo_info
         run: |
           COMMIT_SHA=$(git rev-parse HEAD)
-          BRANCH=$(git rev-parse --abbrev-ref HEAD)
           SHORT_SHA=${COMMIT_SHA:0:40}
+          
+          # 检查是否是tag触发
+          REF="${{ github.ref }}"
+          if [[ "$REF" == refs/tags/* ]]; then
+            TAG=${REF#refs/tags/}
+            echo "TAG=${TAG}" >> $GITHUB_OUTPUT
+            echo "Tag: ${TAG}"
+            # Tag触发时，尝试获取对应的分支（可能不存在）
+            BRANCH=""
+          else
+            BRANCH=$(git rev-parse --abbrev-ref HEAD)
+            echo "Branch: ${BRANCH}"
+          fi
+          
           echo "COMMIT_SHA=${COMMIT_SHA}" >> $GITHUB_OUTPUT
           echo "BRANCH=${BRANCH}" >> $GITHUB_OUTPUT
           echo "SHORT_SHA=${SHORT_SHA}" >> $GITHUB_OUTPUT
           echo "Commit SHA: ${COMMIT_SHA}"
-          echo "Branch: ${BRANCH}"
 
       - name: Determine environment and tag prefix
         id: env
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             ENV="${{ github.event.inputs.environment }}"
+            UPDATE_CICD="true"
           else
             BRANCH="${{ steps.repo_info.outputs.BRANCH }}"
-            if [ "$BRANCH" == "main" ]; then
+            TAG="${{ steps.repo_info.outputs.TAG }}"
+            
+            # Tag触发或release分支：使用prod环境，但不更新cicd仓库
+            if [ -n "$TAG" ] && [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+              # Tag默认使用prod环境
               ENV="prod"
+              UPDATE_CICD="false"
+            elif [[ "$BRANCH" == release/* ]]; then
+              ENV="prod"
+              UPDATE_CICD="false"
+            elif [ "$BRANCH" == "main" ]; then
+              ENV="prod"
+              UPDATE_CICD="true"
             elif [ "$BRANCH" == "latest" ]; then
               ENV="test"
+              UPDATE_CICD="true"
             else
               echo "Unsupported branch: $BRANCH"
               exit 1
@@ -81,7 +109,11 @@ jobs:
           
           if [ "$ENV" == "prod" ]; then
             echo "environment=prod" >> $GITHUB_OUTPUT
-            echo "tag_prefix=main" >> $GITHUB_OUTPUT
+            if [ -n "$TAG" ]; then
+              echo "tag_prefix=${TAG}" >> $GITHUB_OUTPUT
+            else
+              echo "tag_prefix=main" >> $GITHUB_OUTPUT
+            fi
             echo "kustomization_path=apps/genispace/overlays/cn/prod/kustomization.yaml" >> $GITHUB_OUTPUT
           elif [ "$ENV" == "test" ]; then
             echo "environment=test" >> $GITHUB_OUTPUT
@@ -89,8 +121,11 @@ jobs:
             echo "kustomization_path=apps/genispace/overlays/cn/test/kustomization.yaml" >> $GITHUB_OUTPUT
           fi
           
+          echo "update_cicd=${UPDATE_CICD}" >> $GITHUB_OUTPUT
+          
           echo "Environment: $ENV"
           echo "Tag prefix: $(cat $GITHUB_OUTPUT | grep tag_prefix | cut -d'=' -f2)"
+          echo "Update CICD: ${UPDATE_CICD}"
 
       - name: Build and push Docker image
         env:
@@ -113,13 +148,15 @@ jobs:
           echo "Pushing ${FULL_IMAGE_NAME}..."
           docker push "${FULL_IMAGE_NAME}"
           
-          # 同时推送 latest/main 标签
-          if [ "$TAG_PREFIX" == "main" ]; then
-            docker tag "${FULL_IMAGE_NAME}" "${REGISTRY}/${IMAGE_NAME}:main"
-            docker push "${REGISTRY}/${IMAGE_NAME}:main"
-          elif [ "$TAG_PREFIX" == "latest" ]; then
-            docker tag "${FULL_IMAGE_NAME}" "${REGISTRY}/${IMAGE_NAME}:latest"
-            docker push "${REGISTRY}/${IMAGE_NAME}:latest"
+          # 同时推送 latest/main 标签（仅非tag触发时）
+          if [ -z "${{ steps.repo_info.outputs.TAG }}" ]; then
+            if [ "$TAG_PREFIX" == "main" ]; then
+              docker tag "${FULL_IMAGE_NAME}" "${REGISTRY}/${IMAGE_NAME}:main"
+              docker push "${REGISTRY}/${IMAGE_NAME}:main"
+            elif [ "$TAG_PREFIX" == "latest" ]; then
+              docker tag "${FULL_IMAGE_NAME}" "${REGISTRY}/${IMAGE_NAME}:latest"
+              docker push "${REGISTRY}/${IMAGE_NAME}:latest"
+            fi
           fi
           
           echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
@@ -131,6 +168,7 @@ jobs:
           yq --version
 
       - name: Update Kustomization
+        if: steps.env.outputs.update_cicd == 'true'
         run: |
           cd cicd
           
@@ -158,6 +196,7 @@ jobs:
           yq eval '.images[] | select(.name == "'"${IMAGE_NAME_FULL}"'")' "${KUSTOMIZATION_PATH}"
 
       - name: Commit and push changes to cicd repository
+        if: steps.env.outputs.update_cicd == 'true'
         run: |
           cd cicd
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
@@ -189,7 +228,15 @@ jobs:
           echo "- **Service**: ${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Environment**: ${{ steps.env.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Branch**: ${{ steps.repo_info.outputs.BRANCH }}" >> $GITHUB_STEP_SUMMARY
+          if [ -n "${{ steps.repo_info.outputs.TAG }}" ]; then
+            echo "- **Tag**: ${{ steps.repo_info.outputs.TAG }}" >> $GITHUB_STEP_SUMMARY
+          fi
           echo "- **Commit SHA**: ${{ steps.repo_info.outputs.COMMIT_SHA }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Image Tag**: ${{ env.IMAGE_TAG }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Image**: ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Kustomization Path**: cicd/${{ steps.env.outputs.kustomization_path }}" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.env.outputs.update_cicd }}" == "true" ]; then
+            echo "- **CICD Update**: ✅ Updated" >> $GITHUB_STEP_SUMMARY
+            echo "- **Kustomization Path**: cicd/${{ steps.env.outputs.kustomization_path }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **CICD Update**: ⏭️ Skipped (release branch or tag)" >> $GITHUB_STEP_SUMMARY
+          fi
