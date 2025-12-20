@@ -42,7 +42,8 @@ function setupMiddlewares(app, config) {
       
       // 生产环境使用配置的origin
       const allowedOrigins = Array.isArray(config.corsOrigin) ? config.corsOrigin : [config.corsOrigin];
-      if (config.corsOrigin === '*' || allowedOrigins.indexOf(origin) !== -1) {
+      // 检查是否允许所有来源（支持 '*' 字符串或数组中的 '*'）
+      if (config.corsOrigin === '*' || allowedOrigins.includes('*') || allowedOrigins.indexOf(origin) !== -1) {
         return callback(null, true);
       }
       
