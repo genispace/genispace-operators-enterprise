@@ -39,24 +39,38 @@ router.post('/extract', validateExtractText, asyncHandler(async (req, res) => {
   const startTime = Date.now();
   const { fileId } = req.body;
   
+  // 响应大小限制：100KB
+  const MAX_RESPONSE_TEXT_SIZE = 100 * 1024; // 100KB
+  
   try {
     // 检查认证
     textExtractor.checkAuth(req);
     
     // 提取文本
-    const text = await textExtractor.extractText(fileId, req);
+    const fullText = await textExtractor.extractText(fileId, req);
     
     const processingTime = Date.now() - startTime;
+    
+    // 如果文本超过限制，只返回前100KB
+    const isTruncated = fullText.length > MAX_RESPONSE_TEXT_SIZE;
+    const text = isTruncated ? fullText.substring(0, MAX_RESPONSE_TEXT_SIZE) : fullText;
     
     const responseData = {
       text,
       fileId,
-      textLength: text.length,
+      textLength: fullText.length, // 原始文本长度
+      returnedLength: text.length,   // 实际返回的文本长度
+      isTruncated,                   // 是否被截断
       extractedAt: new Date().toISOString(),
       processingTimeMs: processingTime
     };
     
-    sendSuccessResponse(res, responseData, '文本提取成功');
+    // 如果被截断，添加提示信息
+    if (isTruncated) {
+      responseData.message = `文本内容过大（${(fullText.length / 1024).toFixed(2)}KB），已截断为前100KB。完整文本长度：${fullText.length} 字符`;
+    }
+    
+    sendSuccessResponse(res, responseData, isTruncated ? '文本提取成功（内容已截断）' : '文本提取成功');
     
   } catch (error) {
     console.error('文本提取失败:', error);
