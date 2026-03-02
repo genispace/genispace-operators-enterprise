@@ -5,7 +5,7 @@ FROM node:22-alpine
 # 设置工作目录
 WORKDIR /app
 
-# 安装必要的系统依赖（包含PDF生成所需的Chromium和中文字体）
+# 安装必要的系统依赖（包含PDF生成所需的Chromium、中文字体、pdf-table-extractor所需的Python）
 RUN apk add --no-cache \
     dumb-init \
     ca-certificates \
@@ -18,7 +18,9 @@ RUN apk add --no-cache \
     font-noto \
     font-noto-cjk \
     fontconfig \
-    wget
+    wget \
+    python3 \
+    py3-pip
 
 # 创建非root用户
 RUN addgroup -g 1001 -S nodejs \
@@ -34,6 +36,10 @@ RUN npm ci --only=production --silent \
 # 复制应用代码
 COPY src/ ./src/
 COPY operators/ ./operators/
+
+# 安装 pdf-table-extractor 算子所需的 Python 依赖
+COPY operators/document/pdf-table-extractor/requirements.txt /tmp/
+RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
 
 # 创建必要的目录并设置权限（包含PDF生成outputs目录）
 RUN mkdir -p logs outputs uploads tmp \
