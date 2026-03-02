@@ -37,9 +37,11 @@ RUN npm ci --only=production --silent \
 COPY src/ ./src/
 COPY operators/ ./operators/
 
-# 安装 pdf-table-extractor 算子所需的 Python 依赖
+# 安装 pdf-table-extractor 算子所需的 Python 依赖（使用 venv 避免 externally-managed-environment）
 COPY operators/document/pdf-table-extractor/requirements.txt /tmp/
-RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
+RUN python3 -m venv /app/venv \
+    && /app/venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt
+ENV PATH="/app/venv/bin:$PATH"
 
 # 创建必要的目录并设置权限（包含PDF生成outputs目录）
 RUN mkdir -p logs outputs uploads tmp \
