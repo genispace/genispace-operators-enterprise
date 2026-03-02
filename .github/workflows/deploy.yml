@@ -114,11 +114,11 @@ jobs:
             else
               echo "tag_prefix=main" >> $GITHUB_OUTPUT
             fi
-            echo "kustomization_path=apps/genispace/overlays/cn/prod/kustomization.yaml" >> $GITHUB_OUTPUT
+            echo "kustomization_paths=apps/genispace/overlays/cn/prod/kustomization.yaml apps/genispace/overlays/global/prod/kustomization.yaml" >> $GITHUB_OUTPUT
           elif [ "$ENV" == "test" ]; then
             echo "environment=test" >> $GITHUB_OUTPUT
             echo "tag_prefix=latest" >> $GITHUB_OUTPUT
-            echo "kustomization_path=apps/genispace/overlays/cn/test/kustomization.yaml" >> $GITHUB_OUTPUT
+            echo "kustomization_paths=apps/genispace/overlays/cn/test/kustomization.yaml apps/genispace/overlays/global/test/kustomization.yaml" >> $GITHUB_OUTPUT
           fi
           
           echo "update_cicd=${UPDATE_CICD}" >> $GITHUB_OUTPUT
@@ -182,18 +182,22 @@ jobs:
           
           cd ..
           
-          KUSTOMIZATION_PATH="cicd/${{ steps.env.outputs.kustomization_path }}"
+          KUSTOMIZATION_PATHS="${{ steps.env.outputs.kustomization_paths }}"
           IMAGE_TAG="${{ env.IMAGE_TAG }}"
           IMAGE_NAME_FULL="${REGISTRY}/${IMAGE_NAME}"
           
-          echo "Updating ${KUSTOMIZATION_PATH} with tag ${IMAGE_TAG}"
-          
-          # 使用 yq 更新镜像标签
-          yq eval ".images[] |= select(.name == \"${IMAGE_NAME_FULL}\") |= .newTag = \"${IMAGE_TAG}\"" -i "${KUSTOMIZATION_PATH}"
-          
-          # 验证更新是否成功
-          echo "Updated kustomization.yaml:"
-          yq eval '.images[] | select(.name == "'"${IMAGE_NAME_FULL}"'")' "${KUSTOMIZATION_PATH}"
+          # 更新所有环境的 kustomization.yaml
+          for KUSTOMIZATION_PATH in ${KUSTOMIZATION_PATHS}; do
+            FULL_PATH="cicd/${KUSTOMIZATION_PATH}"
+            echo "Updating ${FULL_PATH} with tag ${IMAGE_TAG}"
+            
+            # 使用 yq 更新镜像标签
+            yq eval ".images[] |= select(.name == \"${IMAGE_NAME_FULL}\") |= .newTag = \"${IMAGE_TAG}\"" -i "${FULL_PATH}"
+            
+            # 验证更新是否成功
+            echo "Updated ${KUSTOMIZATION_PATH}:"
+            yq eval '.images[] | select(.name == "'"${IMAGE_NAME_FULL}"'")' "${FULL_PATH}"
+          done
 
       - name: Commit and push changes to cicd repository
         if: steps.env.outputs.update_cicd == 'true'
@@ -202,7 +206,7 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           
-          KUSTOMIZATION_PATH="${{ steps.env.outputs.kustomization_path }}"
+          KUSTOMIZATION_PATHS="${{ steps.env.outputs.kustomization_paths }}"
           ENVIRONMENT="${{ steps.env.outputs.environment }}"
           IMAGE_TAG="${{ env.IMAGE_TAG }}"
           
@@ -210,15 +214,20 @@ jobs:
           CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
           echo "Current branch: ${CURRENT_BRANCH}"
           
-          git add "${KUSTOMIZATION_PATH}"
+          # 添加所有更新的文件
+          for KUSTOMIZATION_PATH in ${KUSTOMIZATION_PATHS}; do
+            git add "${KUSTOMIZATION_PATH}"
+          done
           
           # 检查是否有更改
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "chore(${{ env.IMAGE_NAME }}): update image tag to ${IMAGE_TAG} for ${ENVIRONMENT} environment [skip ci]"
+            # 生成提交信息，列出所有更新的环境
+            ENV_LIST=$(echo "${KUSTOMIZATION_PATHS}" | sed 's|apps/genispace/overlays/||g' | sed 's|/kustomization.yaml||g' | tr ' ' ',')
+            git commit -m "chore(${{ env.IMAGE_NAME }}): update image tag to ${IMAGE_TAG} for ${ENVIRONMENT} environment (${ENV_LIST}) [skip ci]"
             git push origin "${CURRENT_BRANCH}"
-            echo "Successfully pushed changes to ${ENVIRONMENT} environment"
+            echo "Successfully pushed changes to ${ENVIRONMENT} environment (${ENV_LIST})"
           fi
 
       - name: Summary
@@ -236,7 +245,11 @@ jobs:
           echo "- **Image**: ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}" >> $GITHUB_STEP_SUMMARY
           if [ "${{ steps.env.outputs.update_cicd }}" == "true" ]; then
             echo "- **CICD Update**: ✅ Updated" >> $GITHUB_STEP_SUMMARY
-            echo "- **Kustomization Path**: cicd/${{ steps.env.outputs.kustomization_path }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Kustomization Paths**: " >> $GITHUB_STEP_SUMMARY
+            KUSTOMIZATION_PATHS="${{ steps.env.outputs.kustomization_paths }}"
+            for path in ${KUSTOMIZATION_PATHS}; do
+              echo "  - cicd/${path}" >> $GITHUB_STEP_SUMMARY
+            done
           else
             echo "- **CICD Update**: ⏭️ Skipped (release branch or tag)" >> $GITHUB_STEP_SUMMARY
           fi
