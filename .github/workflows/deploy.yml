@@ -43,9 +43,6 @@ jobs:
           path: cicd
         continue-on-error: false
 
-      - name: Install Python deps for pdf-table-extractor
-        run: pip install -r operators/document/pdf-table-extractor/requirements.txt
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
