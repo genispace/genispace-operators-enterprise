@@ -149,3 +149,5 @@ debug.js
 *.backup
 *.orig
 outputs/
+
+.cursorignore
