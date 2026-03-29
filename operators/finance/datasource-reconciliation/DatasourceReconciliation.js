@@ -53,6 +53,97 @@ function extractRowType(rows) {
   return null;
 }
 
+const TYPE_ACCOUNTING = 'ACCOUNTING_RECORD';
+const TYPE_BANK = 'BANK_STATEMENT';
+
+/**
+ * reconciliation-matcher 以「日记账为 baseline、流水为 target」时聚合最稳；与用户请求的 baseline/target 名称无关。
+ * @returns {{ accountingRecords: object[], bankRecords: object[], remapToUser: boolean }}
+ */
+function resolveCanonicalAccountingBankSides(baselineRecords, targetRecords) {
+  const bt = extractRowType(baselineRecords);
+  const tt = extractRowType(targetRecords);
+  if (bt === TYPE_BANK && tt === TYPE_ACCOUNTING) {
+    return {
+      accountingRecords: targetRecords,
+      bankRecords: baselineRecords,
+      remapToUser: true,
+      stableBookBankPair: true,
+    };
+  }
+  if (bt === TYPE_ACCOUNTING && tt === TYPE_BANK) {
+    return {
+      accountingRecords: baselineRecords,
+      bankRecords: targetRecords,
+      remapToUser: false,
+      stableBookBankPair: true,
+    };
+  }
+  return {
+    accountingRecords: baselineRecords,
+    bankRecords: targetRecords,
+    remapToUser: false,
+    stableBookBankPair: false,
+  };
+}
+
+/**
+ * 按 id 数值序排列（副本）。日记账与流水来自不同 POST 时返回顺序常不一致，会导致同一套匹配逻辑
+ * 正反结果不同；id 在两侧通常稳定且与业务主键一致，比按日期/金额排序对第二轮贪心的扰动更小。
+ * @param {object[]} rows
+ * @returns {object[]}
+ */
+function sortRecordsByStableId(rows) {
+  const arr = [...(rows || [])];
+  arr.sort((a, b) => {
+    const sa =
+      a?.id != null && String(a.id).trim() !== '' ? String(a.id) : '\uffff';
+    const sb =
+      b?.id != null && String(b.id).trim() !== '' ? String(b.id) : '\uffff';
+    return sa.localeCompare(sb, undefined, { numeric: true });
+  });
+  return arr;
+}
+
+/**
+ * 将 matcher 输出（账=baseline、银行=target）映射回用户配置的 baseline/target。
+ */
+function remapMatchEntryFromCanonicalToUser(m) {
+  if (!m || typeof m !== 'object') return m;
+  const { matchType, matchScore } = m;
+  if (matchType === 'ONE_TO_MANY') {
+    return {
+      baselineRecords: m.targetRecords,
+      targetRecord: m.baselineRecord,
+      matchScore,
+      matchType: 'MANY_TO_ONE',
+    };
+  }
+  if (matchType === 'MANY_TO_ONE') {
+    return {
+      baselineRecord: m.targetRecord,
+      targetRecords: m.baselineRecords,
+      matchScore,
+      matchType: 'ONE_TO_MANY',
+    };
+  }
+  return {
+    baselineRecord: m.targetRecord,
+    targetRecord: m.baselineRecord,
+    matchScore,
+    matchType,
+  };
+}
+
+function remapReconciliationToUserBaselineTarget(internal, remapToUser) {
+  if (!remapToUser) return internal;
+  return {
+    matches: (internal.matches || []).map(remapMatchEntryFromCanonicalToUser),
+    unmatchedBaselineAccount: internal.unmatchedTargetAccount,
+    unmatchedTargetAccount: internal.unmatchedBaselineAccount,
+  };
+}
+
 class DatasourceReconciliation {
   constructor(config = {}) {
     this.config = {
@@ -202,19 +293,34 @@ class DatasourceReconciliation {
     const baselineRecords = b.rows;
     const targetRecords = t.rows;
 
-    const matchConfig =
-      body.matchConfig && typeof body.matchConfig === 'object' ? body.matchConfig : {};
+    const matchConfigRaw =
+      body.matchConfig && typeof body.matchConfig === 'object' ? { ...body.matchConfig } : {};
+    const skipStableIdOrder = matchConfigRaw.stableSideOrderById === false;
+    delete matchConfigRaw.stableSideOrderById;
+    const matchConfig = matchConfigRaw;
+
+    let { accountingRecords, bankRecords, remapToUser, stableBookBankPair } =
+      resolveCanonicalAccountingBankSides(baselineRecords, targetRecords);
+
+    if (stableBookBankPair && !skipStableIdOrder) {
+      accountingRecords = sortRecordsByStableId(accountingRecords);
+      bankRecords = sortRecordsByStableId(bankRecords);
+    }
 
     logger.info('数据源对账：POST 拉取完成，开始匹配', {
       datasourceId,
       baselineCount: baselineRecords.length,
       targetCount: targetRecords.length,
+      canonicalRemap: remapToUser,
+      stableIdOrder: stableBookBankPair && !skipStableIdOrder,
+      accountingCount: accountingRecords.length,
+      bankCount: bankRecords.length,
     });
 
-    const { matches, unmatchedBaselineAccount, unmatchedTargetAccount } = matchRecords(
-      baselineRecords,
-      targetRecords,
-      matchConfig
+    const internal = matchRecords(accountingRecords, bankRecords, matchConfig);
+    const { matches, unmatchedBaselineAccount, unmatchedTargetAccount } = remapReconciliationToUserBaselineTarget(
+      internal,
+      remapToUser
     );
 
     stripReconciliationTsMs(matches, unmatchedBaselineAccount, unmatchedTargetAccount);

@@ -2,13 +2,13 @@
  * 财务对账 - 智能匹配算法（含预处理逻辑，单文件可独立运行于 JS 脚本执行器）
  * 源自《财务智能对账系统实现方案》4.3 节
  *
- * 匹配规则（入参顺序无关，基准/对账文件可任意放第一或第二参数）：
+ * 匹配规则（数据源对账算子会将两侧规范为「日记账 baseline、银行 target」再调用；直接调用本模块时建议保持该顺序，否则聚合轮次结果可能不同）：
  * 1. 第一轮：精确匹配（金额完全一致，日期相近，得分≥95）
- * 2. 第二轮a：一对多（第一参1笔 = 第二参多笔金额之和）
- * 3. 第二轮b：多对一（第一参多笔金额之和 = 第二参1笔）
- * 4. 第三轮：模糊匹配（考虑容差，得分≥minMatchScore）
- * 5. 第四轮：在第三轮之后，同号且金额一致（±amountTolerance）、日期差≤dateTolerance 的剩余记录，
- *    记为 FUZZY，matchScore 固定为 minMatchScore（文本弱一致时的兜底）
+ * 2. 第二轮：模糊匹配（考虑容差，得分≥minMatchScore）
+ * 3. 第三轮：同号且金额一致（±amountTolerance）、日期差≤dateTolerance 的剩余记录 → FUZZY 兜底
+ * 4. 第四轮a：一对多（子集和 + 分数/日期跨度门槛；非尾部时 maxSpread=min(dateTolerance, aggregateMaxDateSpreadDays)）
+ * 5. 第四轮b：多对一，与第四轮 a 对称
+ * 6. 第五轮：宽松一对多/多对一（门槛见 lateAggregate*，在未匹配池不超过 lateAggregateMaxUnmatched* 时执行）
  *
  * 记录格式要求（与 reconciliation-standardizer 输出一致）：
  * - id: 可选，用于追踪
@@ -24,7 +24,7 @@
 const ETC_VEHICLE_PATTERN = /([京津冀晋蒙辽吉黑沪苏浙皖闽赣鲁豫鄂湘粤桂琼川贵云滇藏陕秦甘陇青宁新渝台][A-Z0-9]{4,8})/;
 /** 批量扣款类关键词：财务摘要多为"公积金XXX"，银行对方为公积金中心，双方摘要均含关键词即可视为同类；结息-农商/结息同理 */
 /** 货款认领等：双方均含货款时视为同类（上海业丰纸盒货款认领 ↔ 上海业丰印务货款） */
-const BATCH_DEDUCTION_KEYWORDS = ['公积金', '社保', '个税', '通讯费', '移动电话费', '工会经费', '税费', '平湖电力批扣', '平湖水费批扣', '结息', '货款'];
+const BATCH_DEDUCTION_KEYWORDS = ['公积金', '社保', '个税', '通讯费', '移动电话费', '工会经费', '税费', '平湖电力批扣', '平湖水费批扣', '结息', '货款', '通行费', '高速'];
 const SUMMARY_KEYWORDS = [
   '水、电费', '水电费', '电费', '房租', '房租费', '货款', '采购款', '工资', '工资发放',
   '公积金', '个税', '通讯费', '移动电话费', '工会经费', '社保', '税费', '结息', '结息-',
@@ -71,7 +71,6 @@ function enrichCounterparty(record) {
   return {
     ...record,
     counterpartyName: extracted || name,
-    counterparty_name: extracted || name,
   };
 }
 
@@ -84,8 +83,7 @@ function getEtcSearchText(record) {
   return [
     record?.summary ?? '',
     record?.counterpartyName ?? '',
-    record?.counterparty_name ?? '',
-    record?.reference_number ?? record?.referenceNumber ?? '',
+    record?.referenceNumber ?? '',
   ].join(' ');
 }
 
@@ -111,45 +109,173 @@ function recordMatchesEtcOrToll(record, vehicleId, baselineHasToll) {
   return false;
 }
 
+/** 银行侧常见高速/ETC 扣款描述（无车牌时的宽松兜底，仍靠金额子集和约束） */
+function recordLooksLikeHighwayToll(record) {
+  const text = getEtcSearchText(record);
+  return (
+    text.includes('通行费') ||
+    text.includes('高速') ||
+    text.includes('ETC') ||
+    text.includes('路网')
+  );
+}
+
+function isEtcLikeBankRecord(record) {
+  const t = getEtcSearchText(record);
+  if (t.includes('代理ETC')) return true;
+  return recordLooksLikeHighwayToll(record);
+}
+
 /**
- * 子集和搜索：从候选中找出金额之和等于目标（容差内）且数量>=minSize 的子集
- * 用于 ONE_TO_MANY：基准账 1 笔 = 对账侧多笔之和（如 ETC 沪BJW108通行费 = 多条沪BJW108 高速扣费之和）
- * 贪心顺序可能漏匹配，子集和可找到正确组合
+ * 财务账 vs 银行流水：若银行明显为 ETC/高速扣款，则财务摘要须含车牌或通行费等。
+ * ONE_TO_MANY（基准=账、目标=银行）与 MANY_TO_ONE（基准=银行、目标=账）对称使用，防止「结息」等多笔 ETC 凑金额。
+ */
+function accountingAllowsEtcBankRecord(accountingRecord, bankRecord) {
+  if (!isEtcLikeBankRecord(bankRecord)) return true;
+  const s = String(accountingRecord?.summary ?? '');
+  if (s.includes('通行费') || s.includes('ETC') || s.includes('代理ETC')) return true;
+  return !!extractEtcVehicleId(accountingRecord);
+}
+
+/**
+ * 将金额规范为数字（兼容字符串）
+ * @param {unknown} v
+ * @returns {number}
+ */
+function toAmountNumber(v) {
+  const n = typeof v === 'number' ? v : parseFloat(String(v ?? ''));
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * 子集和（DFS + 剪枝）。用于 ONE_TO_MANY / MANY_TO_ONE；避免旧版 1<<n 在 n 较大时溢出或漏枚举。
+ * 典型场景：基准账 1 笔 = 银行多笔之和，或多笔记账之和 = 银行 1 笔（如 ETC、货款拆分）。
+ * 使用绝对值之和与 targetAmount（正数）比较，调用方需保证候选与基准同号。
  * @param {Array<{r: object, idx: number}>} candidates
  * @param {number} targetAmount
  * @param {number} tolerance
  * @param {number} minSize
+ * @param {number} maxSize
  * @returns {Array<{r: object, idx: number}>|null}
  */
-function popcount32(mask) {
+function popcountMask(mask) {
   let c = 0;
   for (let t = mask >>> 0; t; t &= t - 1) c++;
   return c;
 }
 
-function findSubsetSum(candidates, targetAmount, tolerance, minSize = 2) {
+function findSubsetSumDfs(candidates, targetAmount, tolerance, minSize, maxSize) {
   if (!candidates || candidates.length < minSize) return null;
   const n = candidates.length;
-  // 快速路径：候选金额总和等于目标时直接返回（ETC 一对多常见：基准账1笔=对账侧多笔之和）
-  const totalSum = candidates.reduce((s, c) => s + Math.abs(c.r?.amount ?? 0), 0);
-  if (n >= minSize && Math.abs(totalSum - targetAmount) <= tolerance) return candidates;
-  const maxIter = Math.min(1 << n, 65536); // 提高上限以支持更多候选（如 16 个候选=65536）
-  for (let mask = (1 << minSize) - 1; mask < maxIter; mask++) {
-    if (popcount32(mask) < minSize) continue;
-    let sum = 0;
-    const picked = [];
-    for (let i = 0; i < n && picked.length < 20; i++) {
-      if (mask & (1 << i)) {
-        const item = candidates[i];
-        sum += Math.abs(item.r?.amount ?? 0);
-        picked.push(item);
-      }
-    }
+  const absAmt = (item) => Math.abs(toAmountNumber(item.r?.amount));
+  // 快速路径：全体候选条数>=minSize 且总和命中
+  const totalSum = candidates.reduce((s, c) => s + absAmt(c), 0);
+  if (
+    n >= minSize &&
+    n <= maxSize &&
+    Math.abs(totalSum - targetAmount) <= tolerance
+  ) {
+    return [...candidates];
+  }
+  const sorted = [...candidates].sort((a, b) => absAmt(b) - absAmt(a));
+  let best = null;
+
+  function dfs(start, picked, sum) {
+    if (picked.length > maxSize) return;
+    if (sum - targetAmount > tolerance) return;
     if (picked.length >= minSize && Math.abs(sum - targetAmount) <= tolerance) {
-      return picked;
+      best = [...picked];
+      return;
+    }
+    if (start >= n) return;
+    // 上界剪枝：剩余全加也达不到目标
+    let restMax = 0;
+    for (let i = start; i < n; i++) restMax += absAmt(sorted[i]);
+    if (sum + restMax + tolerance < targetAmount) return;
+
+    for (let i = start; i < n; i++) {
+      const item = sorted[i];
+      const a = absAmt(item);
+      picked.push(item);
+      dfs(i + 1, picked, sum + a);
+      picked.pop();
+      if (best) return;
     }
   }
-  return null;
+
+  dfs(0, [], 0);
+  return best;
+}
+
+/**
+ * 子集和命中目标时，在多个合法子集中取 evaluate 认可且 score 最高者（解决「先搜到子集被拒后不再尝试」）
+ * n≤22 用位掩码枚举；更大则用 DFS 全量搜（依赖剪枝，仅用于候选已被截断的场景）
+ * @param {(picked: Array<{r: object, idx: number}>) => { ok: boolean, score: number }} evaluate
+ */
+function findBestAggregateSubset(candidates, targetAmount, tolerance, minSize, maxSize, evaluate) {
+  if (!candidates || candidates.length < minSize) return null;
+  const n = candidates.length;
+  const absAmt = (item) => Math.abs(toAmountNumber(item.r?.amount));
+
+  let bestPick = null;
+  let bestScore = -Infinity;
+
+  // 全体候选条数在范围内且金额总和即目标（如某车整月 ETC 未匹配条之和）
+  if (n >= minSize && n <= maxSize) {
+    const totalSum = candidates.reduce((s, c) => s + absAmt(c), 0);
+    if (Math.abs(totalSum - targetAmount) <= tolerance) {
+      const ev = evaluate(candidates);
+      if (ev.ok) return [...candidates];
+    }
+  }
+
+  if (n <= 22) {
+    const limit = 1 << n;
+    for (let mask = 0; mask < limit; mask++) {
+      const k = popcountMask(mask);
+      if (k < minSize || k > maxSize) continue;
+      const picked = [];
+      let sum = 0;
+      for (let i = 0; i < n; i++) {
+        if (mask & (1 << i)) {
+          picked.push(candidates[i]);
+          sum += absAmt(candidates[i]);
+        }
+      }
+      if (Math.abs(sum - targetAmount) > tolerance) continue;
+      const ev = evaluate(picked);
+      if (ev.ok && ev.score > bestScore) {
+        bestScore = ev.score;
+        bestPick = picked;
+      }
+    }
+    return bestPick;
+  }
+
+  const sorted = [...candidates].sort((a, b) => absAmt(b) - absAmt(a));
+  function dfs(i, picked, sum) {
+    if (picked.length > maxSize || sum - targetAmount > tolerance) return;
+    if (i === sorted.length) {
+      if (picked.length >= minSize && Math.abs(sum - targetAmount) <= tolerance) {
+        const ev = evaluate(picked);
+        if (ev.ok && ev.score > bestScore) {
+          bestScore = ev.score;
+          bestPick = [...picked];
+        }
+      }
+      return;
+    }
+    let restMax = 0;
+    for (let j = i; j < sorted.length; j++) restMax += absAmt(sorted[j]);
+    if (sum + restMax + tolerance < targetAmount) return;
+    dfs(i + 1, picked, sum);
+    const item = sorted[i];
+    picked.push(item);
+    dfs(i + 1, picked, sum + absAmt(item));
+    picked.pop();
+  }
+  dfs(0, [], 0);
+  return bestPick;
 }
 
 // ============ 匹配核心 ============
@@ -179,16 +305,49 @@ function daysDiff(date1, date2) {
 }
 
 /**
- * 标准化单条记录字段名，兼容 snake_case 与 camelCase
+ * 按与 anchor 日期接近程度排序后截断候选，减少一对多/多对一的搜索空间
+ * @param {Array<{r: object, idx: number}>} items
+ * @param {object} anchorRecord
+ * @param {number} maxKeep
+ */
+function limitCandidatesByDateProximity(items, anchorRecord, maxKeep) {
+  if (!items || items.length <= maxKeep) return items;
+  const withDist = items.map((item) => ({
+    item,
+    d: daysDiff(anchorRecord.transactionDate, item.r.transactionDate),
+  }));
+  withDist.sort((a, b) => a.d - b.d);
+  return withDist.slice(0, maxKeep).map((x) => x.item);
+}
+
+/** 基准与候选记录借贷方向一致（同为收入或同为支出） */
+function sameAmountSign(baselineRecord, otherRecord) {
+  const b = toAmountNumber(baselineRecord?.amount);
+  const o = toAmountNumber(otherRecord?.amount);
+  if (b === 0 || o === 0) return b === o;
+  return (b > 0 && o > 0) || (b < 0 && o < 0);
+}
+
+/**
+ * 标准化单条记录：读取时兼容 snake_case，输出为驼峰主字段，不附带 transaction_date、counterparty_name、reference_number、name、is_baseline
  * @param {object} record
  * @returns {object}
  */
 function normalizeRecord(record) {
   if (!record || typeof record !== 'object') return record;
+  const {
+    transaction_date,
+    counterparty_name,
+    reference_number,
+    name,
+    is_baseline,
+    ...rest
+  } = record;
   return {
-    ...record,
-    transactionDate: record.transactionDate ?? record.transaction_date,
-    counterpartyName: record.counterpartyName ?? record.counterparty_name,
+    ...rest,
+    transactionDate: record.transactionDate ?? transaction_date,
+    counterpartyName: record.counterpartyName ?? counterparty_name,
+    referenceNumber: record.referenceNumber ?? reference_number,
   };
 }
 
@@ -238,7 +397,14 @@ function calculateTextSimilarity(str1, str2) {
 
 /**
  * 创建匹配器（纯函数实现，适用于严格沙箱环境）
- * @param {object} [config] - 配置 { amountTolerance, dateTolerance, minMatchScore }
+ * @param {object} [config] - 配置 { amountTolerance, dateTolerance, minMatchScore,
+ *   aggregateMaxSubsetSize, aggregateMaxCandidates, aggregateMinMatchScore, aggregateMaxDateSpreadDays,
+ *   tailAggregateMaxUnmatchedBaseline, tailAggregateMaxUnmatchedTarget, tailAggregateMinMatchScore,
+ *   tailAggregateMaxDateSpreadDays, aggregateBestPickMaxCandidates,
+ *   enableLateAggregate, lateAggregateMinMatchScore, lateAggregateMaxDateSpreadDays,
+ *   lateAggregateMaxUnmatchedBaseline, lateAggregateMaxUnmatchedTarget,
+ *   etcAggregateDateTolerance, etcAggregateMinMatchScore,
+ *   etcAggregateMaxSubsetSize, etcAggregateCandidateCap, lateAggregateTinyBaselineLe }
  * @returns {{ matchRecords: function }}
  */
 function createMatcher(config = {}) {
@@ -246,8 +412,63 @@ function createMatcher(config = {}) {
     amountTolerance: config.amountTolerance ?? 0.01,
     dateTolerance: config.dateTolerance ?? 32,
     minMatchScore: config.minMatchScore ?? 70,
+    /** 一对多/多对一时，子集最多包含几条对侧记录（防组合爆炸） */
+    aggregateMaxSubsetSize: config.aggregateMaxSubsetSize ?? 12,
+    /** 进入子集和搜索前，按与基准日期接近程度截断候选条数 */
+    aggregateMaxCandidates: config.aggregateMaxCandidates ?? 28,
+    /** 聚合匹配最低分（聚合在模糊之后执行时可略低；仍建议 ≥75 抑制纯金额巧合） */
+    aggregateMinMatchScore: config.aggregateMinMatchScore ?? 76,
+    /**
+     * 非 ETC 场景下，子集内各笔相对锚点记录的最大允许天数差（过宽则多为巧合）
+     * ETC/通行费仍用 dateTolerance 筛候选，此处不额外收紧
+     */
+    aggregateMaxDateSpreadDays: config.aggregateMaxDateSpreadDays ?? 12,
+    /** 剩余未匹配条数较少时启用「尾部聚合」：放宽日期跨度至 dateTolerance、略降 aggregate 最低分，并枚举最优子集 */
+    tailAggregateMaxUnmatchedBaseline: config.tailAggregateMaxUnmatchedBaseline ?? 15,
+    tailAggregateMaxUnmatchedTarget: config.tailAggregateMaxUnmatchedTarget ?? 50,
+    tailAggregateMinMatchScore: config.tailAggregateMinMatchScore ?? 68,
+    /**
+     * 尾部聚合时子集最大日期跨度上限（相对锚点）；未设置时沿用 dateTolerance（与仅设 aggregateMaxDateSpreadDays 时的旧行为一致）
+     */
+    tailAggregateMaxDateSpreadDays: config.tailAggregateMaxDateSpreadDays,
+    /** 候选不超过该条数时用 findBestAggregateSubset，避免「第一个金额命中子集」被拒后漏掉正确组合 */
+    aggregateBestPickMaxCandidates: config.aggregateBestPickMaxCandidates ?? 20,
+    /** 第四轮聚合之后再跑一轮宽松一对多/多对一（仍要求金额子集和命中） */
+    enableLateAggregate: config.enableLateAggregate !== false,
+    lateAggregateMinMatchScore: config.lateAggregateMinMatchScore ?? 58,
+    /** 未设置则等于 dateTolerance */
+    lateAggregateMaxDateSpreadDays: config.lateAggregateMaxDateSpreadDays,
+    lateAggregateMaxUnmatchedBaseline: config.lateAggregateMaxUnmatchedBaseline ?? 25,
+    lateAggregateMaxUnmatchedTarget: config.lateAggregateMaxUnmatchedTarget ?? 60,
+    /**
+     * 摘要含 ETC 车牌时，一对多/多对一候选与锚点的最大允许天数差（记账日晚于通行日常见）。
+     * 不设则 max(dateTolerance, 60)，避免 8 月底通行 vs 9 月底入账超过 32 天被整批滤掉。
+     */
+    etcAggregateDateTolerance: config.etcAggregateDateTolerance,
+    /** ETC 聚合在金额子集已命中时的最低综合分（低于 aggregateMinMatchScore，因通行日与入账日跨月拉低日期分） */
+    etcAggregateMinMatchScore: config.etcAggregateMinMatchScore ?? 52,
+    /** ETC 一对多允许的最大银行条数（单车整月可远多于 12） */
+    etcAggregateMaxSubsetSize: config.etcAggregateMaxSubsetSize ?? 120,
+    /** ETC 一对多进入子集搜索前最多保留几条候选（按日期贴近锚点截断） */
+    etcAggregateCandidateCap: config.etcAggregateCandidateCap ?? 150,
+    /** 剩余未匹配基准很少时，第五轮不再受 lateAggregateMaxUnmatchedTarget 限制（否则 ETC 池子上百笔时第五轮永不执行） */
+    lateAggregateTinyBaselineLe: config.lateAggregateTinyBaselineLe ?? 8,
     ...config,
   };
+
+  /** 聚合筛选用：锚点记录是否带车牌 → 放宽日历窗口 */
+  function aggregateDateToleranceDays(anchorRecord) {
+    if (extractEtcVehicleId(anchorRecord)) {
+      if (
+        cfg.etcAggregateDateTolerance != null &&
+        Number.isFinite(cfg.etcAggregateDateTolerance)
+      ) {
+        return cfg.etcAggregateDateTolerance;
+      }
+      return Math.max(cfg.dateTolerance, 60);
+    }
+    return cfg.dateTolerance;
+  }
 
   function finalizeMatchScore(score) {
     return Math.round(Math.min(100, score));
@@ -275,16 +496,22 @@ function createMatcher(config = {}) {
       baselineRecord.transactionDate,
       targetRecord.transactionDate
     );
+    const pairDateTol =
+      extractEtcVehicleId(baselineRecord) || extractEtcVehicleId(targetRecord)
+        ? aggregateDateToleranceDays(
+            extractEtcVehicleId(baselineRecord) ? baselineRecord : targetRecord
+          )
+        : cfg.dateTolerance;
     if (dateDiff === 0) {
       score += 30;
-    } else if (dateDiff <= cfg.dateTolerance) {
-      score += 30 * (1 - dateDiff / cfg.dateTolerance);
+    } else if (dateDiff <= pairDateTol) {
+      score += 30 * (1 - dateDiff / pairDateTol);
     }
 
     // 批量扣款等加分（仅 includes，无 Levenshtein）提前算，便于剪枝
     if (
       amountDiff <= cfg.amountTolerance &&
-      dateDiff <= cfg.dateTolerance &&
+      dateDiff <= pairDateTol &&
       sameSign
     ) {
       const bankText = `${baselineRecord.summary ?? ''} ${baselineRecord.counterpartyName ?? ''}`.trim();
@@ -362,15 +589,16 @@ function createMatcher(config = {}) {
 
   function calculateOneToManyMatchScore(baselineRecord, targetRecords) {
     const totalAmount = targetRecords.reduce(
-      (sum, r) => sum + Math.abs(r.amount),
+      (sum, r) => sum + Math.abs(toAmountNumber(r.amount)),
       0
     );
-    const amountDiff = Math.abs(Math.abs(baselineRecord.amount) - totalAmount);
+    const baseAmt = Math.abs(toAmountNumber(baselineRecord.amount));
+    const amountDiff = Math.abs(baseAmt - totalAmount);
     let score = 0;
     if (amountDiff <= cfg.amountTolerance) {
       score += 50;
-    } else {
-      score += 50 * (1 - amountDiff / Math.abs(baselineRecord.amount));
+    } else if (baseAmt > 0) {
+      score += 50 * (1 - amountDiff / baseAmt);
     }
     const dateScores = targetRecords.map((ar) => {
       const diff = daysDiff(baselineRecord.transactionDate, ar.transactionDate);
@@ -389,11 +617,83 @@ function createMatcher(config = {}) {
     const avgNameScore =
       nameScores.reduce((a, b) => a + b, 0) / nameScores.length;
     score += 20 * avgNameScore;
-    return Math.round(score);
+
+    const bankText = `${baselineRecord.summary ?? ''} ${baselineRecord.counterpartyName ?? ''}`.trim();
+    let textExtra = 0;
+    let bestSumSim = 0;
+    for (const ar of targetRecords) {
+      const accText = `${ar.summary ?? ''} ${ar.counterpartyName ?? ''}`.trim();
+      for (const kw of BATCH_DEDUCTION_KEYWORDS) {
+        if (bankText.includes(kw) && accText.includes(kw)) {
+          textExtra = Math.max(textExtra, 12);
+          break;
+        }
+      }
+      if (
+        (bankText.includes('手续费') || bankText.includes('收费')) &&
+        (accText.includes('手续费') || accText.includes('收费'))
+      ) {
+        textExtra = Math.max(textExtra, 12);
+      }
+      if (baselineRecord.summary && ar.summary) {
+        bestSumSim = Math.max(
+          bestSumSim,
+          calculateTextSimilarity(
+            String(baselineRecord.summary),
+            String(ar.summary)
+          )
+        );
+      }
+    }
+    score += textExtra + Math.round(10 * bestSumSim);
+    return Math.round(Math.min(100, score));
   }
 
   function calculateManyToOneMatchScore(baselineRecords, targetRecord) {
     return calculateOneToManyMatchScore(targetRecord, baselineRecords);
+  }
+
+  /** 子集内各条相对 anchor 的最大日历差 */
+  function maxDaysSpreadFromAnchor(anchorRecord, sideRecords) {
+    let m = 0;
+    for (const r of sideRecords) {
+      m = Math.max(m, daysDiff(anchorRecord.transactionDate, r.transactionDate));
+    }
+    return m;
+  }
+
+  /**
+   * 一对多是否接受：金额已由子集和保证；再卡分数 + 非 ETC 时卡日期集中度
+   * @param {{ minScore?: number, maxSpreadDays?: number }} [overrides] - 尾部聚合时放宽
+   */
+  function acceptOneToManyAggregate(baselineRecord, targetRecords, overrides) {
+    const minScore = overrides?.minScore ?? cfg.aggregateMinMatchScore;
+    const maxSpread = overrides?.maxSpreadDays ?? cfg.aggregateMaxDateSpreadDays;
+    const score = calculateOneToManyMatchScore(baselineRecord, targetRecords);
+    const effectiveMin = extractEtcVehicleId(baselineRecord)
+      ? Math.min(minScore, cfg.etcAggregateMinMatchScore)
+      : minScore;
+    if (score < effectiveMin) return false;
+    if (extractEtcVehicleId(baselineRecord)) return true;
+    if ((baselineRecord.summary ?? '').includes('通行费')) return true;
+    return maxDaysSpreadFromAnchor(baselineRecord, targetRecords) <= maxSpread;
+  }
+
+  /**
+   * 多对一是否接受：锚点为对账侧单笔
+   * @param {{ minScore?: number, maxSpreadDays?: number }} [overrides]
+   */
+  function acceptManyToOneAggregate(baselineRecords, targetRecord, overrides) {
+    const minScore = overrides?.minScore ?? cfg.aggregateMinMatchScore;
+    const maxSpread = overrides?.maxSpreadDays ?? cfg.aggregateMaxDateSpreadDays;
+    const score = calculateManyToOneMatchScore(baselineRecords, targetRecord);
+    const effectiveMin = extractEtcVehicleId(targetRecord)
+      ? Math.min(minScore, cfg.etcAggregateMinMatchScore)
+      : minScore;
+    if (score < effectiveMin) return false;
+    if (extractEtcVehicleId(targetRecord)) return true;
+    if ((targetRecord.summary ?? '').includes('通行费')) return true;
+    return maxDaysSpreadFromAnchor(targetRecord, baselineRecords) <= maxSpread;
   }
 
   /**
@@ -439,6 +739,56 @@ function createMatcher(config = {}) {
     const unmatchedBaselineAccount = (baselineRecords || []).map(normalizeRecordForMatch);
     const unmatchedTargetAccount = (targetRecords || []).map(normalizeRecordForMatch);
 
+    /**
+     * 一对多：目标侧候选（银行常不写车牌时，严格匹配空则用「通行费」兜底）
+     */
+    function collectOneToManyTargetCandidates(baselineRecord) {
+      const etcVehicleId = extractEtcVehicleId(baselineRecord);
+      const baselineHasToll = (baselineRecord.summary ?? '').includes('通行费');
+      const useStrictVehicle = !!etcVehicleId;
+      const dtol = aggregateDateToleranceDays(baselineRecord);
+      const byDate = (item) =>
+        daysDiff(baselineRecord.transactionDate, item.r.transactionDate) <= dtol;
+      let list = unmatchedTargetAccount
+        .map((r, idx) => ({ r, idx }))
+        .filter((item) => sameAmountSign(baselineRecord, item.r))
+        .filter(byDate)
+        .filter((item) => useStrictVehicle
+          ? recordMatchesEtcVehicle(item.r, etcVehicleId)
+          : recordMatchesEtcOrToll(item.r, etcVehicleId, baselineHasToll));
+      if (etcVehicleId && list.length === 0) {
+        list = unmatchedTargetAccount
+          .map((r, idx) => ({ r, idx }))
+          .filter((item) => sameAmountSign(baselineRecord, item.r))
+          .filter(byDate)
+          .filter((item) => recordMatchesEtcOrToll(item.r, etcVehicleId, true));
+      }
+      if (etcVehicleId && list.length === 0) {
+        list = unmatchedTargetAccount
+          .map((r, idx) => ({ r, idx }))
+          .filter((item) => sameAmountSign(baselineRecord, item.r))
+          .filter(byDate)
+          .filter((item) => recordLooksLikeHighwayToll(item.r));
+      }
+      return list.filter((item) =>
+        accountingAllowsEtcBankRecord(baselineRecord, item.r)
+      );
+    }
+
+    function collectManyToOneBaselineCandidates(targetRecord) {
+      const targetVehicleId = extractEtcVehicleId(targetRecord);
+      const dtol = aggregateDateToleranceDays(targetRecord);
+      return unmatchedBaselineAccount
+        .map((r, idx) => ({ r, idx }))
+        .filter((item) => !targetVehicleId || recordMatchesEtcVehicle(item.r, targetVehicleId))
+        .filter((item) => sameAmountSign(item.r, targetRecord))
+        .filter(
+          (item) =>
+            daysDiff(item.r.transactionDate, targetRecord.transactionDate) <= dtol
+        )
+        .filter((item) => accountingAllowsEtcBankRecord(targetRecord, item.r));
+    }
+
     // 第一轮：精确匹配（金额完全一致，日期相近）
     for (let i = unmatchedBaselineAccount.length - 1; i >= 0; i--) {
       const baselineRecord = unmatchedBaselineAccount[i];
@@ -459,85 +809,7 @@ function createMatcher(config = {}) {
       }
     }
 
-    // 第二轮a：一对多（第一参1笔 = 第二参多笔之和）
-    // 优先处理有 ETC 车牌的基准账（沪BJW108通行费等），避免被 etcVehicleId=null 的同金额记录抢先
-    const baselineToProcess = [...unmatchedBaselineAccount].sort((a, b) => {
-      const va = extractEtcVehicleId(a);
-      const vb = extractEtcVehicleId(b);
-      return (vb ? 1 : 0) - (va ? 1 : 0); // 有车牌的排前面
-    });
-    for (const baselineRecord of baselineToProcess) {
-      if (!unmatchedBaselineAccount.includes(baselineRecord)) continue; // 已被前面匹配消耗
-      const targetAmount = Math.abs(baselineRecord.amount);
-      const etcVehicleId = extractEtcVehicleId(baselineRecord);
-      const baselineHasToll = (baselineRecord.summary ?? '').includes('通行费');
-      // 有车牌时严格按车牌匹配；无车牌时才用 通行费 兜底，避免 沪BJW108通行费 误匹配 上海公共交通卡 等
-      const useStrictVehicle = !!etcVehicleId;
-      const candidates = unmatchedTargetAccount
-        .map((r, idx) => ({ r, idx }))
-        .filter((item) => useStrictVehicle
-          ? recordMatchesEtcVehicle(item.r, etcVehicleId)
-          : recordMatchesEtcOrToll(item.r, etcVehicleId, baselineHasToll))
-        .filter((item) => daysDiff(baselineRecord.transactionDate, item.r.transactionDate) <= cfg.dateTolerance);
-      const found = findSubsetSum(candidates, targetAmount, cfg.amountTolerance, 2);
-      if (found && found.length >= 2) {
-        const records = found.map((m) => m.r);
-        const indices = found.map((m) => m.idx).sort((a, b) => b - a);
-        matches.push({
-          baselineRecord,
-          targetRecords: records,
-          matchScore: calculateOneToManyMatchScore(baselineRecord, records),
-          matchType: 'ONE_TO_MANY',
-        });
-        unmatchedBaselineAccount.splice(unmatchedBaselineAccount.indexOf(baselineRecord), 1);
-        indices.forEach((idx) => unmatchedTargetAccount.splice(idx, 1));
-      }
-    }
-
-    // 第二轮b：多对一（第一参多笔之和 = 第二参1笔）- 基准为日记账时适用
-    // 当对账侧有 ETC 车牌时，仅考虑基准账中摘要或对方户名含该车牌的记录（分别匹配，任一包含即可）
-    for (let i = unmatchedTargetAccount.length - 1; i >= 0; i--) {
-      const targetRecord = unmatchedTargetAccount[i];
-      const targetAmount = Math.abs(targetRecord.amount);
-      const targetVehicleId = extractEtcVehicleId(targetRecord);
-      const indicesByAmount = unmatchedBaselineAccount
-        .map((r, idx) => ({ r, idx }))
-        .filter((item) => !targetVehicleId || recordMatchesEtcVehicle(item.r, targetVehicleId))
-        .sort((a, b) => Math.abs(b.r.amount) - Math.abs(a.r.amount));
-      const matchedBank = [];
-      let totalAmount = 0;
-      for (const { r: baselineRecord, idx: j } of indicesByAmount) {
-        const dateDiff = daysDiff(
-          baselineRecord.transactionDate,
-          targetRecord.transactionDate
-        );
-        if (dateDiff <= cfg.dateTolerance) {
-          totalAmount += Math.abs(baselineRecord.amount);
-          matchedBank.push({ record: baselineRecord, index: j });
-          if (totalAmount > targetAmount + cfg.amountTolerance) break;
-          if (
-            matchedBank.length >= 2 &&
-            Math.abs(Math.abs(targetRecord.amount) - totalAmount) <=
-              cfg.amountTolerance
-          ) {
-            const records = matchedBank.map((m) => m.record);
-            matches.push({
-              baselineRecords: records,
-              targetRecord,
-              matchScore: calculateManyToOneMatchScore(records, targetRecord),
-              matchType: 'MANY_TO_ONE',
-            });
-            unmatchedTargetAccount.splice(i, 1);
-            matchedBank
-              .sort((a, b) => b.index - a.index)
-              .forEach((m) => unmatchedBaselineAccount.splice(m.index, 1));
-            break;
-          }
-        }
-      }
-    }
-
-    // 第三轮：模糊匹配（考虑容差）
+    // 第二轮：模糊匹配（考虑容差）
     for (let i = unmatchedBaselineAccount.length - 1; i >= 0; i--) {
       const baselineRecord = unmatchedBaselineAccount[i];
       let bestMatch = null;
@@ -571,7 +843,7 @@ function createMatcher(config = {}) {
       }
     }
 
-    // 第四轮：模糊匹配之后，同号+金额一致+日期在容差内 → FUZZY，得分固定 minMatchScore
+    // 第三轮：模糊匹配之后，同号+金额一致+日期在容差内 → FUZZY，得分固定 minMatchScore
     function isFuzzyAmountDateFallbackPair(b, t) {
       const nb = parseFloat(String(b.amount ?? ''));
       const nt = parseFloat(String(t.amount ?? ''));
@@ -580,7 +852,11 @@ function createMatcher(config = {}) {
         (nb > 0 && nt > 0) || (nb < 0 && nt < 0) || (nb === 0 && nt === 0);
       if (!sameSign) return false;
       if (Math.abs(nb - nt) > cfg.amountTolerance) return false;
-      if (daysDiff(b.transactionDate, t.transactionDate) > cfg.dateTolerance) return false;
+      const fallbackDateTol =
+        extractEtcVehicleId(b) || extractEtcVehicleId(t)
+          ? aggregateDateToleranceDays(extractEtcVehicleId(b) ? b : t)
+          : cfg.dateTolerance;
+      if (daysDiff(b.transactionDate, t.transactionDate) > fallbackDateTol) return false;
       return true;
     }
     for (let i = unmatchedBaselineAccount.length - 1; i >= 0; i--) {
@@ -603,6 +879,347 @@ function createMatcher(config = {}) {
         unmatchedBaselineAccount.splice(i, 1);
         unmatchedTargetAccount.splice(j, 1);
         break;
+      }
+    }
+
+    // 第四轮a：一对多（仅在剩余未匹配上执行，避免与已完成的 1:1 模糊抢流水）
+    const ubAgg = unmatchedBaselineAccount.length;
+    const utAgg = unmatchedTargetAccount.length;
+    const tailAggregate =
+      ubAgg <= cfg.tailAggregateMaxUnmatchedBaseline &&
+      utAgg <= cfg.tailAggregateMaxUnmatchedTarget;
+    /** 非尾部：aggregateMaxDateSpreadDays 与 dateTolerance 取小，配置即可生效 */
+    const normalAggOverrides = {
+      minScore: cfg.aggregateMinMatchScore,
+      maxSpreadDays: Math.min(cfg.dateTolerance, cfg.aggregateMaxDateSpreadDays),
+    };
+    /** 尾部：默认同 dateTolerance；可单独设 tailAggregateMaxDateSpreadDays */
+    const tailOverrides = tailAggregate
+      ? {
+        minScore: Math.min(
+          cfg.aggregateMinMatchScore,
+          cfg.tailAggregateMinMatchScore
+        ),
+        maxSpreadDays:
+          cfg.tailAggregateMaxDateSpreadDays != null
+            ? Math.min(cfg.dateTolerance, cfg.tailAggregateMaxDateSpreadDays)
+            : cfg.dateTolerance,
+      }
+      : null;
+    const oneToManyAggOverrides = tailAggregate ? tailOverrides : normalAggOverrides;
+
+    const baselineToProcessAgg = [...unmatchedBaselineAccount].sort((a, b) => {
+      const va = extractEtcVehicleId(a);
+      const vb = extractEtcVehicleId(b);
+      return (vb ? 1 : 0) - (va ? 1 : 0);
+    });
+    for (const baselineRecord of baselineToProcessAgg) {
+      if (!unmatchedBaselineAccount.includes(baselineRecord)) continue;
+      const targetAmount = Math.abs(toAmountNumber(baselineRecord.amount));
+      const candidates = collectOneToManyTargetCandidates(baselineRecord);
+      const hasEtcBase =
+        !!extractEtcVehicleId(baselineRecord) ||
+        String(baselineRecord.summary ?? '').includes('通行费');
+      const subsetMax = hasEtcBase
+        ? cfg.etcAggregateMaxSubsetSize
+        : cfg.aggregateMaxSubsetSize;
+      const capKeep = tailAggregate
+        ? Math.min(
+          Math.max(utAgg, cfg.aggregateMaxCandidates),
+          40
+        )
+        : cfg.aggregateMaxCandidates;
+      const etcCap = cfg.etcAggregateCandidateCap;
+      const capForLimit = hasEtcBase
+        ? Math.max(capKeep, etcCap)
+        : capKeep;
+      const capped = limitCandidatesByDateProximity(
+        candidates,
+        baselineRecord,
+        capForLimit
+      );
+      const useBestPick =
+        tailAggregate || capped.length <= cfg.aggregateBestPickMaxCandidates;
+
+      let found = null;
+      if (useBestPick) {
+        found = findBestAggregateSubset(
+          capped,
+          targetAmount,
+          cfg.amountTolerance,
+          2,
+          subsetMax,
+          (picked) => {
+            const records = picked.map((p) => p.r);
+            const score = calculateOneToManyMatchScore(baselineRecord, records);
+            const ok = acceptOneToManyAggregate(
+              baselineRecord,
+              records,
+              oneToManyAggOverrides
+            );
+            return { ok, score };
+          }
+        );
+      } else {
+        found = findSubsetSumDfs(
+          capped,
+          targetAmount,
+          cfg.amountTolerance,
+          2,
+          subsetMax
+        );
+        if (
+          found &&
+          !acceptOneToManyAggregate(
+            baselineRecord,
+            found.map((x) => x.r),
+            oneToManyAggOverrides
+          )
+        ) {
+          found = null;
+        }
+      }
+
+      if (found && found.length >= 2) {
+        const records = found.map((m) => m.r);
+        const indices = found.map((m) => m.idx).sort((a, b) => b - a);
+        const aggScore = calculateOneToManyMatchScore(baselineRecord, records);
+        matches.push({
+          baselineRecord,
+          targetRecords: records,
+          matchScore: aggScore,
+          matchType: 'ONE_TO_MANY',
+        });
+        unmatchedBaselineAccount.splice(unmatchedBaselineAccount.indexOf(baselineRecord), 1);
+        indices.forEach((idx) => unmatchedTargetAccount.splice(idx, 1));
+      }
+    }
+
+    // 第四轮b：多对一（尾部参数与第四轮 a 一致，在第四轮 a 之后会再次缩小池子，此处按当前池重算 tail）
+    const ubAgg2 = unmatchedBaselineAccount.length;
+    const utAgg2 = unmatchedTargetAccount.length;
+    const tailAggregate2 =
+      ubAgg2 <= cfg.tailAggregateMaxUnmatchedBaseline &&
+      utAgg2 <= cfg.tailAggregateMaxUnmatchedTarget;
+    const tailOverrides2 = tailAggregate2
+      ? {
+        minScore: Math.min(
+          cfg.aggregateMinMatchScore,
+          cfg.tailAggregateMinMatchScore
+        ),
+        maxSpreadDays:
+          cfg.tailAggregateMaxDateSpreadDays != null
+            ? Math.min(cfg.dateTolerance, cfg.tailAggregateMaxDateSpreadDays)
+            : cfg.dateTolerance,
+      }
+      : null;
+    const manyToOneAggOverrides = tailAggregate2 ? tailOverrides2 : normalAggOverrides;
+
+    for (let i = unmatchedTargetAccount.length - 1; i >= 0; i--) {
+      const targetRecord = unmatchedTargetAccount[i];
+      const targetAmount = Math.abs(toAmountNumber(targetRecord.amount));
+      const candidates = collectManyToOneBaselineCandidates(targetRecord);
+      const hasEtcTarget =
+        !!extractEtcVehicleId(targetRecord) ||
+        String(targetRecord.summary ?? '').includes('通行费');
+      const subsetMaxM2o = hasEtcTarget
+        ? cfg.etcAggregateMaxSubsetSize
+        : cfg.aggregateMaxSubsetSize;
+      const capKeep2 = tailAggregate2
+        ? Math.min(Math.max(ubAgg2, cfg.aggregateMaxCandidates), 40)
+        : cfg.aggregateMaxCandidates;
+      const capForLimitM2o = hasEtcTarget
+        ? Math.max(capKeep2, cfg.etcAggregateCandidateCap)
+        : capKeep2;
+      const capped = limitCandidatesByDateProximity(
+        candidates,
+        targetRecord,
+        capForLimitM2o
+      );
+      const useBestPick2 =
+        tailAggregate2 || capped.length <= cfg.aggregateBestPickMaxCandidates;
+
+      let found = null;
+      if (useBestPick2) {
+        found = findBestAggregateSubset(
+          capped,
+          targetAmount,
+          cfg.amountTolerance,
+          2,
+          subsetMaxM2o,
+          (picked) => {
+            const records = picked.map((p) => p.r);
+            const score = calculateManyToOneMatchScore(records, targetRecord);
+            const ok = acceptManyToOneAggregate(
+              records,
+              targetRecord,
+              manyToOneAggOverrides
+            );
+            return { ok, score };
+          }
+        );
+      } else {
+        found = findSubsetSumDfs(
+          capped,
+          targetAmount,
+          cfg.amountTolerance,
+          2,
+          subsetMaxM2o
+        );
+        if (
+          found &&
+          !acceptManyToOneAggregate(
+            found.map((x) => x.r),
+            targetRecord,
+            manyToOneAggOverrides
+          )
+        ) {
+          found = null;
+        }
+      }
+
+      if (found && found.length >= 2) {
+        const records = found.map((m) => m.r);
+        const indices = found.map((m) => m.idx).sort((a, b) => b - a);
+        const aggScore = calculateManyToOneMatchScore(records, targetRecord);
+        matches.push({
+          baselineRecords: records,
+          targetRecord,
+          matchScore: aggScore,
+          matchType: 'MANY_TO_ONE',
+        });
+        unmatchedTargetAccount.splice(i, 1);
+        indices.forEach((idx) => unmatchedBaselineAccount.splice(idx, 1));
+      }
+    }
+
+    // 第五轮：宽松一对多 / 多对一（第四轮未配上的「金额可对、文本弱」场景；与 tail 池大小无关）
+    const ubLate = unmatchedBaselineAccount.length;
+    const utLate = unmatchedTargetAccount.length;
+    const lateSpread =
+      cfg.lateAggregateMaxDateSpreadDays != null
+        ? Math.min(cfg.dateTolerance, cfg.lateAggregateMaxDateSpreadDays)
+        : cfg.dateTolerance;
+    const lateOverrides = {
+      minScore: cfg.lateAggregateMinMatchScore,
+      maxSpreadDays: lateSpread,
+    };
+    const lateTargetOk =
+      ubLate <= cfg.lateAggregateTinyBaselineLe ||
+      utLate <= cfg.lateAggregateMaxUnmatchedTarget;
+    if (
+      cfg.enableLateAggregate &&
+      ubLate >= 1 &&
+      utLate >= 2 &&
+      ubLate <= cfg.lateAggregateMaxUnmatchedBaseline &&
+      lateTargetOk
+    ) {
+      const baselineLate = [...unmatchedBaselineAccount].sort((a, b) => {
+        const va = extractEtcVehicleId(a);
+        const vb = extractEtcVehicleId(b);
+        return (vb ? 1 : 0) - (va ? 1 : 0);
+      });
+      for (const baselineRecord of baselineLate) {
+        if (!unmatchedBaselineAccount.includes(baselineRecord)) continue;
+        const targetAmount = Math.abs(toAmountNumber(baselineRecord.amount));
+        const candidates = collectOneToManyTargetCandidates(baselineRecord);
+        const hasEtcBaseLate =
+          !!extractEtcVehicleId(baselineRecord) ||
+          String(baselineRecord.summary ?? '').includes('通行费');
+        const subsetMaxLate = hasEtcBaseLate
+          ? cfg.etcAggregateMaxSubsetSize
+          : cfg.aggregateMaxSubsetSize;
+        const capLate = Math.min(Math.max(utLate, cfg.aggregateMaxCandidates), 40);
+        const etcCapLate = cfg.etcAggregateCandidateCap;
+        const capLateLimit = hasEtcBaseLate
+          ? Math.max(capLate, etcCapLate)
+          : capLate;
+        const capped = limitCandidatesByDateProximity(
+          candidates,
+          baselineRecord,
+          capLateLimit
+        );
+        const foundLate = findBestAggregateSubset(
+          capped,
+          targetAmount,
+          cfg.amountTolerance,
+          2,
+          subsetMaxLate,
+          (picked) => {
+            const records = picked.map((p) => p.r);
+            const score = calculateOneToManyMatchScore(baselineRecord, records);
+            const ok = acceptOneToManyAggregate(
+              baselineRecord,
+              records,
+              lateOverrides
+            );
+            return { ok, score };
+          }
+        );
+        if (foundLate && foundLate.length >= 2) {
+          const records = foundLate.map((m) => m.r);
+          const indices = foundLate.map((m) => m.idx).sort((a, b) => b - a);
+          const aggScore = calculateOneToManyMatchScore(baselineRecord, records);
+          matches.push({
+            baselineRecord,
+            targetRecords: records,
+            matchScore: aggScore,
+            matchType: 'ONE_TO_MANY',
+          });
+          unmatchedBaselineAccount.splice(unmatchedBaselineAccount.indexOf(baselineRecord), 1);
+          indices.forEach((idx) => unmatchedTargetAccount.splice(idx, 1));
+        }
+      }
+
+      for (let i = unmatchedTargetAccount.length - 1; i >= 0; i--) {
+        const targetRecord = unmatchedTargetAccount[i];
+        const targetAmount = Math.abs(toAmountNumber(targetRecord.amount));
+        const candidates = collectManyToOneBaselineCandidates(targetRecord);
+        const hasEtcTargetLate =
+          !!extractEtcVehicleId(targetRecord) ||
+          String(targetRecord.summary ?? '').includes('通行费');
+        const subsetMaxLateM2o = hasEtcTargetLate
+          ? cfg.etcAggregateMaxSubsetSize
+          : cfg.aggregateMaxSubsetSize;
+        const capLate2 = Math.min(Math.max(ubLate, cfg.aggregateMaxCandidates), 40);
+        const capLateLimitM2o = hasEtcTargetLate
+          ? Math.max(capLate2, cfg.etcAggregateCandidateCap)
+          : capLate2;
+        const capped = limitCandidatesByDateProximity(
+          candidates,
+          targetRecord,
+          capLateLimitM2o
+        );
+        const foundLate2 = findBestAggregateSubset(
+          capped,
+          targetAmount,
+          cfg.amountTolerance,
+          2,
+          subsetMaxLateM2o,
+          (picked) => {
+            const records = picked.map((p) => p.r);
+            const score = calculateManyToOneMatchScore(records, targetRecord);
+            const ok = acceptManyToOneAggregate(
+              records,
+              targetRecord,
+              lateOverrides
+            );
+            return { ok, score };
+          }
+        );
+        if (foundLate2 && foundLate2.length >= 2) {
+          const records = foundLate2.map((m) => m.r);
+          const indices = foundLate2.map((m) => m.idx).sort((a, b) => b - a);
+          const aggScore = calculateManyToOneMatchScore(records, targetRecord);
+          matches.push({
+            baselineRecords: records,
+            targetRecord,
+            matchScore: aggScore,
+            matchType: 'MANY_TO_ONE',
+          });
+          unmatchedTargetAccount.splice(i, 1);
+          indices.forEach((idx) => unmatchedBaselineAccount.splice(idx, 1));
+        }
       }
     }
 
