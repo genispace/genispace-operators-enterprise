@@ -59,17 +59,9 @@ router.post(
   '/reconcile',
   validateReconcileBody,
   asyncHandler(async (req, res) => {
-    const start = Date.now();
     try {
       const data = await service.reconcile(req, req.body || {});
-      sendSuccessResponse(
-        res,
-        {
-          ...data,
-          processingTimeMs: Date.now() - start,
-        },
-        '数据源对账完成'
-      );
+      sendSuccessResponse(res, data, '数据源对账完成');
     } catch (error) {
       const msg = error.message || String(error);
       let code = 'DATASOURCE_RECONCILE_FAILED';

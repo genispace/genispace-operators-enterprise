@@ -4,14 +4,23 @@
 
 const axios = require('axios');
 const logger = require('../../../src/utils/logger');
+const AgentExecute = require('../../platform/agent-execute/AgentExecute');
 const { matchRecords } = require('./reconciliation-matcher.js');
+const {
+  parseRematchPayloadFromAgentResponse,
+  mergeAgentMatchesIntoReconciliationState,
+} = require('./reconciliation-agent-rematch.js');
+
+/** reconciliation-detect-and-insert-sql.js 为 ESM，此处用动态 import 复用同一 Promise */
+const detectSqlModulePromise = import('./reconciliation-detect-and-insert-sql.js');
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const DEFAULT_DATASOURCE_HTTP_TIMEOUT_MS = 60000;
+/** 未配置构造参数与环境变量时，数据源 POST 拉取的 axios 超时（5 分钟） */
+const DEFAULT_DATASOURCE_HTTP_TIMEOUT_MS = 5 * 60 * 1000;
 
-/** 对账算子拉取数据源时 axios 超时：构造参数 config.timeout > GENISPACE_DATASOURCE_RECONCILIATION_TIMEOUT > GENISPACE_DATASOURCE_API_TIMEOUT > 默认 60000 */
+/** 对账算子拉取数据源时 axios 超时：构造参数 config.timeout > GENISPACE_DATASOURCE_RECONCILIATION_TIMEOUT > GENISPACE_DATASOURCE_API_TIMEOUT > 默认 5 分钟 */
 function resolveDatasourceHttpTimeoutMs(configTimeout) {
   const fromConfig = Number(configTimeout);
   if (Number.isFinite(fromConfig) && fromConfig > 0) return fromConfig;
@@ -249,10 +258,12 @@ class DatasourceReconciliation {
   }
 
   /**
+   * 与 {@link reconcile} 相同流程，但返回完整中间结果（config、条数、result、sql、taskId），供本地测试脚本调试，不经 HTTP 暴露。
    * @param {import('express').Request} req
    * @param {object} body
+   * @returns {Promise<{ config: object, baselineRecordCount: number, targetRecordCount: number, matchesCount: number, unmatchedBaselineAccountCount: number, unmatchedTargetAccountCount: number, result: object, sql: string, taskId: string }>}
    */
-  async reconcile(req, body) {
+  async reconcileDiagnostics(req, body) {
     this.checkAuth(req);
 
     if (!body.datasourceId || typeof body.datasourceId !== 'string') {
@@ -318,30 +329,98 @@ class DatasourceReconciliation {
     });
 
     const internal = matchRecords(accountingRecords, bankRecords, matchConfig);
-    const { matches, unmatchedBaselineAccount, unmatchedTargetAccount } = remapReconciliationToUserBaselineTarget(
-      internal,
-      remapToUser
-    );
+    let { matches, unmatchedBaselineAccount, unmatchedTargetAccount } =
+      remapReconciliationToUserBaselineTarget(internal, remapToUser);
 
     stripReconciliationTsMs(matches, unmatchedBaselineAccount, unmatchedTargetAccount);
 
+    const enableAgentMatching = body.enableAgentMatching === true;
+    const bothSidesHaveUnmatched =
+      unmatchedBaselineAccount.length > 0 && unmatchedTargetAccount.length > 0;
+    if (enableAgentMatching && bothSidesHaveUnmatched) {
+      const aid = body.agentId != null ? String(body.agentId).trim() : '';
+      if (!aid) {
+        throw new Error(
+          '开启智能体匹配且基准侧与目标侧均存在未匹配记录时，须在请求体传入 agentId（任务型智能体 UUID）'
+        );
+      }
+      const agent = new AgentExecute({ baseURL: this.config.baseURL });
+      const execResult = await agent.execute(req, {
+        agentId: aid,
+        inputs: {
+          unmatchedBaselineAccount,
+          unmatchedTargetAccount,
+        },
+      });
+      const parsed = parseRematchPayloadFromAgentResponse(execResult.result);
+      const merged = mergeAgentMatchesIntoReconciliationState(
+        { matches, unmatchedBaselineAccount, unmatchedTargetAccount },
+        parsed
+      );
+      matches = merged.matches;
+      unmatchedBaselineAccount = merged.unmatchedBaselineAccount;
+      unmatchedTargetAccount = merged.unmatchedTargetAccount;
+      stripReconciliationTsMs(matches, unmatchedBaselineAccount, unmatchedTargetAccount);
+    }
+
     const baselineType = extractRowType(baselineRecords);
     const targetType = extractRowType(targetRecords);
+    const baselineName = String(body.baselineName ?? '').trim();
+    const targetName = String(body.targetName ?? '').trim();
+
+    const { detectAndGenerateInsertSql } = await detectSqlModulePromise;
+    const { sql, taskId } = await detectAndGenerateInsertSql(
+      {
+        matches,
+        unmatchedBaselineAccount,
+        unmatchedTargetAccount,
+      },
+      {
+        schema,
+        taskName,
+        baselineType,
+        targetType,
+        baselineName,
+        targetName,
+        enableAgentMatching,
+        ...matchConfig,
+      }
+    );
 
     return {
-      schema,
-      taskName,
-      baselineType,
-      targetType,
+      config: {
+        schema,
+        taskName,
+        baselineType,
+        targetType,
+        baselineName,
+        targetName,
+        enableAgentMatching,
+      },
       baselineRecordCount: baselineRecords.length,
       targetRecordCount: targetRecords.length,
       matchesCount: matches.length,
       unmatchedBaselineAccountCount: unmatchedBaselineAccount.length,
       unmatchedTargetAccountCount: unmatchedTargetAccount.length,
-      matches,
-      unmatchedBaselineAccount,
-      unmatchedTargetAccount,
+      result: {
+        matches,
+        unmatchedBaselineAccount,
+        unmatchedTargetAccount,
+      },
+      sql,
+      taskId,
     };
+  }
+
+  /**
+   * HTTP 算子对外：仅返回写入库用的 SQL 与任务 id。
+   * @param {import('express').Request} req
+   * @param {object} body
+   * @returns {Promise<{ sql: string, taskId: string }>}
+   */
+  async reconcile(req, body) {
+    const full = await this.reconcileDiagnostics(req, body);
+    return { sql: full.sql, taskId: full.taskId };
   }
 }
 
