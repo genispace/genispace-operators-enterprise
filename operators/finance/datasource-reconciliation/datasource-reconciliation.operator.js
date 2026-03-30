@@ -2,7 +2,7 @@
  * 数据源对账算子：同一数据源 ID，baselineName / targetName 映射为 POST name + 固定 isBaseline，再 matchRecords
  *
  * @category finance
- * @version 1.0.9
+ * @version 1.1.0
  */
 
 module.exports = {
@@ -10,8 +10,8 @@ module.exports = {
     name: 'datasource-reconciliation',
     title: '数据源对账',
     description:
-      '对同一数据源 ID 用 baselineName（isBaseline=1）、targetName（isBaseline=0）各 POST 一次拉取基准账与目标账，将响应中的记录传入对账脚本；须传 schema、taskName（响应原样回传）；baselineType、targetType 取自数据行首条记录的 type（如 ACCOUNTING_RECORD、BANK_STATEMENT）。拉取数据源 HTTP 超时见环境变量 GENISPACE_DATASOURCE_RECONCILIATION_TIMEOUT（毫秒，优先）或 GENISPACE_DATASOURCE_API_TIMEOUT，默认 60000',
-    version: '1.0.9',
+      '对同一数据源 ID 用 baselineName（isBaseline=1）、targetName（isBaseline=0）各 POST 一次拉取基准账与目标账并匹配；须传 schema、taskName。HTTP 响应 data 仅含 sql、taskId（reconciliation-detect-and-insert-sql 输出；无匹配等场景见脚本说明）。完整中间结果（config、matches、未匹配列表等）请用仓库内 test/script/datasource-reconcile-diagnostics.js 本地调用 reconcileDiagnostics。可选 enableAgentMatching（默认 false）：为 true 且两侧均有未匹配记录时须传 agentId；仅一侧未匹配时不调智能体。拉取超时见 GENISPACE_DATASOURCE_RECONCILIATION_TIMEOUT 或 GENISPACE_DATASOURCE_API_TIMEOUT，默认 5 分钟（300000ms）',
+    version: '1.1.0',
     category: 'finance',
     tags: ['reconciliation', 'datasource', 'finance', 'matching'],
     author: 'GeniSpace AI Team',
@@ -24,7 +24,7 @@ module.exports = {
         post: {
           summary: '同一数据源 POST 双次拉取并执行对账匹配',
           description:
-            '基址：GENISPACE_API_BASE_URL。请求体须含 datasourceId（UUID）、baselineName、targetName、schema、taskName；服务端将分别 POST { name: baselineName, isBaseline: 1 } 与 { name: targetName, isBaseline: 0 }。baselineType/targetType 来自各侧数据行 type 字段。数据源接口使用 Authorization: Bearer，令牌与请求头中通过 GeniSpace 认证提交的 API Key 相同。单次拉取数据源 HTTP 超时（毫秒）：环境变量 GENISPACE_DATASOURCE_RECONCILIATION_TIMEOUT（仅本算子，优先），否则 GENISPACE_DATASOURCE_API_TIMEOUT，默认 60000；两侧并行拉取，各自独立计时。',
+            '基址：GENISPACE_API_BASE_URL。请求体须含 datasourceId（UUID）、baselineName、targetName、schema、taskName；服务端将分别 POST { name: baselineName, isBaseline: 1 } 与 { name: targetName, isBaseline: 0 }。成功时响应 data 仅含 sql、taskId。可选 enableAgentMatching、agentId、matchConfig 等同前。完整诊断输出见 test/script/datasource-reconcile-diagnostics.js。',
           tags: ['数据源对账'],
           security: [{ GeniSpaceAuth: [] }],
           requestBody: {
@@ -56,11 +56,23 @@ module.exports = {
                     },
                     schema: {
                       type: 'string',
-                      description: '必填，trim 后写入响应 data.schema',
+                      description: '必填，trim 后写入响应 data.config.schema',
                     },
                     taskName: {
                       type: 'string',
-                      description: '必填，trim 后写入响应 data.taskName',
+                      description: '必填，trim 后写入响应 data.config.taskName',
+                    },
+                    enableAgentMatching: {
+                      type: 'boolean',
+                      default: false,
+                      description:
+                        '是否启用智能体二次匹配；默认 false；为 true 且基准侧与目标侧均有未匹配记录时才调用 GeniSpace 任务型智能体 execute；仅一侧未匹配时不调用',
+                    },
+                    agentId: {
+                      type: 'string',
+                      format: 'uuid',
+                      description:
+                        '当 enableAgentMatching 为 true 且两侧均存在未匹配记录时必填：任务型智能体 UUID',
                     },
                     matchConfig: {
                       type: 'object',
@@ -93,42 +105,31 @@ module.exports = {
           },
           responses: {
             200: {
-              description: '对账完成（data 内为 matchRecords 结果 + 元数据）',
+              description:
+                '对账完成：data 仅含 sql、taskId，与 reconciliation-detect-and-insert-sql.detectAndGenerateInsertSql 一致',
               content: {
                 'application/json': {
                   schema: {
                     type: 'object',
                     properties: {
                       success: { type: 'boolean', example: true },
+                      timestamp: { type: 'string', format: 'date-time' },
+                      message: { type: 'string', example: '数据源对账完成' },
                       data: {
                         type: 'object',
                         properties: {
-                          schema: { type: 'string', description: '与入参 schema 一致（已 trim）' },
-                          taskName: { type: 'string', description: '与入参 taskName 一致（已 trim）' },
-                          baselineType: {
+                          sql: {
                             type: 'string',
-                            nullable: true,
-                            enum: ['ACCOUNTING_RECORD', 'BANK_STATEMENT'],
                             description:
-                              '基准侧数据行 type（取首条非空；无数据行时为 null；常见值为 ACCOUNTING_RECORD 或 BANK_STATEMENT）',
+                              '写入 reconciliation_* 表的 INSERT 语句（已压成单行）；无匹配或缺任务名时为 SELECT 1;',
                           },
-                          targetType: {
+                          taskId: {
                             type: 'string',
-                            nullable: true,
-                            enum: ['ACCOUNTING_RECORD', 'BANK_STATEMENT'],
                             description:
-                              '目标侧数据行 type（取首条非空；无数据行时为 null；常见值为 ACCOUNTING_RECORD 或 BANK_STATEMENT）',
+                              '本次对账任务 UUID；未生成真实 INSERT 时为空字符串',
                           },
-                          baselineRecordCount: { type: 'integer' },
-                          targetRecordCount: { type: 'integer' },
-                          matchesCount: { type: 'integer' },
-                          unmatchedBaselineAccountCount: { type: 'integer' },
-                          unmatchedTargetAccountCount: { type: 'integer' },
-                          matches: { type: 'array' },
-                          unmatchedBaselineAccount: { type: 'array' },
-                          unmatchedTargetAccount: { type: 'array' },
-                          processingTimeMs: { type: 'integer' },
                         },
+                        required: ['sql', 'taskId'],
                       },
                     },
                   },
