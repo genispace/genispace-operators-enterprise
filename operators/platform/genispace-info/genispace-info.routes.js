@@ -55,7 +55,7 @@ router.post('/user-profile', asyncHandler(async (req, res) => {
     // 如果需要包含团队信息
     if (includeTeams) {
       try {
-        const teams = await client.users.getTeams();
+        const teams = await client.users.getSpaces();
         responseData.teams = teams;
       } catch (error) {
         logger.warn('获取用户团队失败', { error: error ? (error ? (error.message || String(error)) : "Unknown error" || String(error)) : 'Unknown error' });
