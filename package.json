@@ -5,6 +5,7 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
+    "obfuscate": "node scripts/obfuscate.js",
     "dev": "nodemon src/index.js",
     "test": "node test.js",
     "build": "echo 'Build completed successfully'",
@@ -60,6 +61,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "javascript-obfuscator": "^4.1.0",
     "nodemon": "^3.0.2"
   }
 }

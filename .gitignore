@@ -134,7 +134,7 @@ ehthumbs.db
 Thumbs.db
 
 # Docker
-.dockerignore
+!.dockerignore
 
 # PM2
 ecosystem.config.js

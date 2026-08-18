@@ -77,6 +77,20 @@ jobs:
           echo "SHORT_SHA=${SHORT_SHA}" >> $GITHUB_OUTPUT
           echo "Commit SHA: ${COMMIT_SHA}"
 
+      - name: Determine code protection mode
+        id: protection
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" =~ ^refs/tags/(v[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "enable_obfuscation=true" >> "$GITHUB_OUTPUT"
+            echo "code_protection=obfuscated" >> "$GITHUB_OUTPUT"
+            echo "git_tag=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          else
+            echo "enable_obfuscation=false" >> "$GITHUB_OUTPUT"
+            echo "code_protection=source" >> "$GITHUB_OUTPUT"
+            echo "git_tag=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Determine environment and tag prefix
         id: env
         run: |
@@ -88,7 +102,7 @@ jobs:
             TAG="${{ steps.repo_info.outputs.TAG }}"
             
             # Tag触发或release分支：使用prod环境，但不更新cicd仓库
-            if [ -n "$TAG" ] && [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            if [ -n "$TAG" ] && [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               # Tag默认使用prod环境
               ENV="prod"
               UPDATE_CICD="false"
@@ -141,8 +155,30 @@ jobs:
           # 构建镜像
           docker build \
             -f Dockerfile \
+            --build-arg ENABLE_OBFUSCATION=${{ steps.protection.outputs.enable_obfuscation }} \
+            --build-arg CODE_PROTECTION=${{ steps.protection.outputs.code_protection }} \
+            --build-arg GIT_TAG=${{ steps.protection.outputs.git_tag }} \
+            --build-arg COMMIT_SHA=${COMMIT_SHA} \
             -t "${FULL_IMAGE_NAME}" \
             .
+
+          ACTUAL_PROTECTION=$(docker image inspect \
+            --format '{{ index .Config.Labels "com.genispace.code-protection" }}' \
+            "${FULL_IMAGE_NAME}")
+          if [ "${ACTUAL_PROTECTION}" != "${{ steps.protection.outputs.code_protection }}" ]; then
+            echo "Unexpected code protection label: ${ACTUAL_PROTECTION}" >&2
+            exit 1
+          fi
+
+          if [ "${{ steps.protection.outputs.enable_obfuscation }}" = "true" ]; then
+            docker run --rm --entrypoint sh "${FULL_IMAGE_NAME}" -c '
+              test ! -d /app/node_modules/javascript-obfuscator
+              test -s /app/src/index.js
+              test -d /app/operators
+              test -s /app/operators/document/pdf-table-extractor/pdf_table_extractor.py
+              ! find /app/src /app/operators -type f \( -name "*.map" -o -name "*.test.js" -o -name "*.spec.js" \) | grep -q .
+            '
+          fi
           
           # 推送镜像
           echo "Pushing ${FULL_IMAGE_NAME}..."
