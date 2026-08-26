@@ -33,7 +33,8 @@ const {
   Table,
   TableRow,
   TableCell,
-  WidthType
+  WidthType,
+  BorderStyle
 } = require('docx');
 const logger = require('../../../src/utils/logger');
 const config = require('../../../src/config/env');
@@ -106,7 +107,6 @@ class WordGenerator {
       templateData = {},
       fileName,
       wordOptions = {},
-      cssStyles = '',
       req
     } = options;
     
@@ -134,10 +134,12 @@ class WordGenerator {
         `${fileName}_${uniqueId}` : 
         `word_${Date.now()}_${uniqueId}`;
       
-      const templateContent = await this.resolveTemplateSource(markdownTemplate);
+      const templateContent = this.normalizeMarkdownNewlines(
+        await this.resolveTemplateSource(markdownTemplate)
+      );
       const filledMarkdown = Mustache.render(templateContent, templateData);
-      const htmlContent = this.convertMarkdownToHTML(filledMarkdown, cssStyles);
-      const wordPath = await this.generateWordFromHTML(htmlContent, finalFileName, wordOptions);
+      const { paragraphs, headings } = this.parseMarkdownToParagraphs(filledMarkdown);
+      const wordPath = await this.writeWordDocument(finalFileName, wordOptions, paragraphs, headings);
       
       const fileStats = fs.statSync(wordPath);
       
@@ -253,6 +255,7 @@ class WordGenerator {
    * @returns {string} - HTML 内容
    */
   convertMarkdownToHTML(markdown, customCSS = '') {
+ const normalizedMarkdown = this.normalizeMarkdownNewlines(markdown || '');
  // 创建自定义渲染器（兼容 marked v16+）
  const renderer = new marked.Renderer();
     
@@ -303,8 +306,8 @@ class WordGenerator {
    // renderer: renderer
  };
  
- const htmlBody = marked.parse(markdown, markedOptions);
- const cssStyles = this.config.defaultCssStyles + '\n' + (customCSS || '');
+ const htmlBody = marked.parse(normalizedMarkdown, markedOptions);
+ const cssStyles = (this.config.defaultCssStyles || '') + '\n' + (customCSS || '');
  
  // 添加表格容器的CSS样式
  const tableCSS = `
@@ -333,6 +336,341 @@ class WordGenerator {
    </body>
    </html>
  `;
+  }
+
+  /**
+   * 将字面量 \\n / \\t 还原为真实换行，避免整篇 Markdown 被当成一行解析
+   * @param {string} text
+   * @returns {string}
+   */
+  normalizeMarkdownNewlines(text) {
+    if (!text || typeof text !== 'string') {
+      return text;
+    }
+
+    const literalNewlines = (text.match(/\\n/g) || []).length;
+    const realNewlines = (text.match(/\n/g) || []).length;
+    if (literalNewlines > 0 && realNewlines <= 1) {
+      return text
+        .replace(/\\r\\n/g, '\n')
+        .replace(/\\n/g, '\n')
+        .replace(/\\t/g, '\t');
+    }
+
+    return text;
+  }
+
+  /**
+   * 将 marked 行内 tokens 转为 TextRun
+   * @param {Array} tokens
+   * @param {Object} options
+   * @returns {Array}
+   */
+  inlineTokensToTextRuns(tokens = [], options = {}) {
+    const runs = [];
+
+    tokens.forEach((token) => {
+      if (!token) return;
+
+      switch (token.type) {
+        case 'text':
+          if (token.tokens && token.tokens.length > 0) {
+            runs.push(...this.inlineTokensToTextRuns(token.tokens, options));
+          } else {
+            runs.push(new TextRun({
+              text: token.text || '',
+              bold: options.bold,
+              italics: options.italics
+            }));
+          }
+          break;
+        case 'strong':
+          runs.push(...this.inlineTokensToTextRuns(
+            token.tokens && token.tokens.length ? token.tokens : [{ type: 'text', text: token.text || '' }],
+            { ...options, bold: true }
+          ));
+          break;
+        case 'em':
+          runs.push(...this.inlineTokensToTextRuns(
+            token.tokens && token.tokens.length ? token.tokens : [{ type: 'text', text: token.text || '' }],
+            { ...options, italics: true }
+          ));
+          break;
+        case 'codespan':
+          runs.push(new TextRun({
+            text: token.text || '',
+            font: 'Courier New',
+            bold: options.bold,
+            italics: options.italics
+          }));
+          break;
+        case 'link':
+          runs.push(...this.inlineTokensToTextRuns(
+            token.tokens && token.tokens.length ? token.tokens : [{ type: 'text', text: token.text || token.href || '' }],
+            options
+          ));
+          break;
+        case 'br':
+          runs.push(new TextRun({ text: '', break: 1 }));
+          break;
+        case 'escape':
+        case 'html':
+          runs.push(new TextRun({
+            text: token.text || '',
+            bold: options.bold,
+            italics: options.italics
+          }));
+          break;
+        default:
+          if (token.text) {
+            runs.push(new TextRun({
+              text: token.text,
+              bold: options.bold,
+              italics: options.italics
+            }));
+          }
+      }
+    });
+
+    return runs.length > 0 ? runs : [new TextRun('')];
+  }
+
+  /**
+   * 创建带书签的标题段落
+   * @param {string} text
+   * @param {number} level
+   * @param {Object} context
+   * @returns {Paragraph}
+   */
+  createHeadingParagraph(text, level, context) {
+    context.bookmarkCounter++;
+    context.linkIdCounter++;
+
+    const bookmarkId = `_Toc${context.bookmarkCounter.toString().padStart(5, '0')}`;
+    context.headings.push({
+      level,
+      text,
+      bookmark: bookmarkId
+    });
+
+    const headingLevel = level === 1 ? HeadingLevel.HEADING_1 :
+      level === 2 ? HeadingLevel.HEADING_2 :
+      level === 3 ? HeadingLevel.HEADING_3 :
+      level === 4 ? HeadingLevel.HEADING_4 :
+      level === 5 ? HeadingLevel.HEADING_5 :
+      HeadingLevel.HEADING_6;
+
+    return new Paragraph({
+      children: [
+        new BookmarkStart(bookmarkId, context.linkIdCounter),
+        new TextRun({
+          text,
+          bold: true
+        }),
+        new BookmarkEnd(bookmarkId)
+      ],
+      heading: headingLevel,
+      spacing: { before: 400, after: 200 }
+    });
+  }
+
+  /**
+   * 创建 Word 表格（docx@8 的 columnWidths 必须是 DXA 数字数组）
+   * @param {Array<Array<{runs: Array, isHeader?: boolean}>>} rows
+   * @returns {Table|null}
+   */
+  createDocxTable(rows = []) {
+    if (!rows.length) {
+      return null;
+    }
+
+    const columnCount = Math.max(...rows.map((row) => row.length), 1);
+    const contentWidth = 9360;
+    const colWidth = Math.max(Math.floor(contentWidth / columnCount), 200);
+    const borders = {
+      top: { style: BorderStyle.SINGLE, size: 4, color: 'BFBFBF' },
+      bottom: { style: BorderStyle.SINGLE, size: 4, color: 'BFBFBF' },
+      left: { style: BorderStyle.SINGLE, size: 4, color: 'BFBFBF' },
+      right: { style: BorderStyle.SINGLE, size: 4, color: 'BFBFBF' }
+    };
+
+    const tableRows = rows.map((row) => {
+      const cells = [];
+      for (let i = 0; i < columnCount; i++) {
+        const cell = row[i] || { runs: [new TextRun('')], isHeader: false };
+        const runs = cell.runs && cell.runs.length > 0 ? cell.runs : [new TextRun('')];
+        cells.push(new TableCell({
+          children: [new Paragraph({ children: runs })],
+          width: { size: colWidth, type: WidthType.DXA },
+          shading: cell.isHeader ? {
+            type: ShadingType.SOLID,
+            color: 'F2F2F2',
+            fill: 'F2F2F2'
+          } : undefined,
+          borders
+        }));
+      }
+      return new TableRow({ children: cells });
+    });
+
+    return new Table({
+      rows: tableRows,
+      width: {
+        size: colWidth * columnCount,
+        type: WidthType.DXA
+      },
+      columnWidths: Array(columnCount).fill(colWidth)
+    });
+  }
+
+  /**
+   * 将 marked block tokens 转为 docx 元素
+   * @param {Array} tokens
+   * @param {Object} context
+   * @returns {Array}
+   */
+  convertMarkdownTokensToElements(tokens = [], context) {
+    const elements = [];
+
+    tokens.forEach((token) => {
+      if (!token || token.type === 'space') {
+        return;
+      }
+
+      if (token.type === 'heading') {
+        elements.push(this.createHeadingParagraph(token.text || '', token.depth || 1, context));
+        return;
+      }
+
+      if (token.type === 'paragraph') {
+        elements.push(new Paragraph({
+          children: this.inlineTokensToTextRuns(token.tokens || [{ type: 'text', text: token.text || '' }]),
+          spacing: { after: 200 }
+        }));
+        return;
+      }
+
+      if (token.type === 'list') {
+        (token.items || []).forEach((item) => {
+          const inlineTokens = [];
+          (item.tokens || []).forEach((child) => {
+            if (child.type === 'text' || child.type === 'paragraph') {
+              if (child.tokens && child.tokens.length > 0) {
+                inlineTokens.push(...child.tokens);
+              } else {
+                inlineTokens.push({ type: 'text', text: child.text || '' });
+              }
+            } else if (child.type !== 'space' && child.type !== 'list') {
+              inlineTokens.push(child);
+            }
+          });
+
+          const itemRuns = this.inlineTokensToTextRuns(
+            inlineTokens.length > 0 ? inlineTokens : [{ type: 'text', text: item.text || '' }]
+          );
+          elements.push(new Paragraph({
+            children: [new TextRun('• '), ...itemRuns],
+            spacing: { after: 100 },
+            indent: { left: 720 }
+          }));
+
+          const nestedLists = (item.tokens || []).filter((child) => child.type === 'list');
+          if (nestedLists.length > 0) {
+            elements.push(...this.convertMarkdownTokensToElements(nestedLists, context));
+          }
+        });
+        return;
+      }
+
+      if (token.type === 'table') {
+        const headerRow = (token.header || []).map((cell) => ({
+          runs: this.inlineTokensToTextRuns(cell.tokens || [{ type: 'text', text: cell.text || '' }], { bold: true }),
+          isHeader: true
+        }));
+        const bodyRows = (token.rows || []).map((row) => row.map((cell) => ({
+          runs: this.inlineTokensToTextRuns(cell.tokens || [{ type: 'text', text: cell.text || '' }]),
+          isHeader: false
+        })));
+        const table = this.createDocxTable([headerRow, ...bodyRows]);
+        if (table) {
+          elements.push(table);
+          elements.push(new Paragraph({
+            children: [new TextRun('')],
+            spacing: { after: 200 }
+          }));
+        }
+        return;
+      }
+
+      if (token.type === 'code') {
+        elements.push(new Paragraph({
+          children: [new TextRun({
+            text: token.text || '',
+            font: 'Courier New'
+          })],
+          spacing: { after: 200 }
+        }));
+        return;
+      }
+
+      if (token.type === 'hr') {
+        elements.push(new Paragraph({
+          children: [new TextRun('')],
+          spacing: { before: 200, after: 200 }
+        }));
+        return;
+      }
+
+      if (token.type === 'blockquote') {
+        elements.push(...this.convertMarkdownTokensToElements(token.tokens || [], context));
+        return;
+      }
+
+      if (token.type === 'html') {
+        const parsed = this.parseHTMLToParagraphs(token.text || '', true);
+        elements.push(...parsed.paragraphs);
+        parsed.headings.forEach((heading) => context.headings.push(heading));
+        return;
+      }
+
+      if (token.text) {
+        elements.push(new Paragraph({
+          children: [new TextRun(token.text)],
+          spacing: { after: 200 }
+        }));
+      }
+    });
+
+    return elements;
+  }
+
+  /**
+   * 将 Markdown 直接解析为 docx 元素，避免 HTML 正则二次解析丢失列表/表格
+   * @param {string} markdown
+   * @returns {{paragraphs: Array, headings: Array}}
+   */
+  parseMarkdownToParagraphs(markdown) {
+    const normalized = this.normalizeMarkdownNewlines(markdown || '');
+    const headings = [];
+    const context = {
+      bookmarkCounter: 0,
+      linkIdCounter: 0,
+      headings
+    };
+    const tokens = marked.lexer(normalized, {
+      gfm: true,
+      breaks: true
+    });
+    const paragraphs = this.convertMarkdownTokensToElements(tokens, context);
+
+    if (paragraphs.length === 0 && normalized.trim()) {
+      paragraphs.push(new Paragraph({
+        children: [new TextRun(normalized.trim())],
+        spacing: { after: 200 }
+      }));
+    }
+
+    return { paragraphs, headings };
   }
 
   /**
@@ -612,60 +950,33 @@ class WordGenerator {
    */
   parseHTMLTable(tableHtml) {
     const rows = [];
+
+    const collectRows = (html, forceHeader) => {
+      const trMatches = html.match(/<tr[^>]*>([\s\S]*?)<\/tr>/gi) || [];
+      trMatches.forEach((trHtml, index) => {
+        const isHeader = forceHeader || (index === 0 && trHtml.includes('<th'));
+        const cells = this.extractTableRowData(trHtml, isHeader);
+        if (cells.length > 0) {
+          rows.push(cells);
+        }
+      });
+    };
     
-    // 提取表头
     const theadMatch = tableHtml.match(/<thead[^>]*>([\s\S]*?)<\/thead>/i);
     if (theadMatch) {
-      const theadRows = theadMatch[1].match(/<tr[^>]*>([\s\S]*?)<\/tr>/gi) || [];
-      theadRows.forEach(trHtml => {
-        const cells = this.extractTableCells(trHtml, true);
-        if (cells.length > 0) {
-          rows.push(new TableRow({ children: cells }));
-        }
-      });
+      collectRows(theadMatch[1], true);
     }
     
-    // 提取表体
     const tbodyMatch = tableHtml.match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/i);
     if (tbodyMatch) {
-      const tbodyRows = tbodyMatch[1].match(/<tr[^>]*>([\s\S]*?)<\/tr>/gi) || [];
-      tbodyRows.forEach(trHtml => {
-        const cells = this.extractTableCells(trHtml, false);
-        if (cells.length > 0) {
-          rows.push(new TableRow({ children: cells }));
-        }
-      });
-    }
-    
-    // 如果没有thead和tbody，直接解析tr
-    if (rows.length === 0) {
-      const allRows = tableHtml.match(/<tr[^>]*>([\s\S]*?)<\/tr>/gi) || [];
-      allRows.forEach((trHtml, index) => {
-        const isHeader = index === 0 || trHtml.includes('<th');
-        const cells = this.extractTableCells(trHtml, isHeader);
-        if (cells.length > 0) {
-          rows.push(new TableRow({ children: cells }));
-        }
-      });
+      collectRows(tbodyMatch[1], false);
     }
     
     if (rows.length === 0) {
-      return null;
+      collectRows(tableHtml, false);
     }
     
-    const columnCount = rows[0]?.children?.length || 0;
-    
-    return new Table({
-      rows: rows,
-      width: {
-        size: 100,
-        type: WidthType.PERCENTAGE
-      },
-      columnWidths: Array(columnCount).fill(100 / columnCount).map(w => ({
-        size: w,
-        type: WidthType.PERCENTAGE
-      }))
-    });
+    return this.createDocxTable(rows);
   }
 
   /**
@@ -674,41 +985,20 @@ class WordGenerator {
    * @param {boolean} isHeader - 是否为表头
    * @returns {Array} - 单元格数组
    */
-  extractTableCells(trHtml, isHeader = false) {
+  extractTableRowData(trHtml, isHeader = false) {
     const cells = [];
     const cellMatches = trHtml.match(/<(td|th)[^>]*>([\s\S]*?)<\/\1>/gi) || [];
-    
-    cellMatches.forEach(cellHtml => {
-      // 提取单元格内容（保留br标签用于换行）
+
+    cellMatches.forEach((cellHtml) => {
       const contentMatch = cellHtml.match(/<(td|th)[^>]*>([\s\S]*?)<\/\1>/i);
       const cellContent = contentMatch ? contentMatch[2] : '';
-      
-      // 解析HTML内容为TextRun数组（处理br标签）
       const textRuns = this.parseHTMLContentToTextRuns(cellContent);
-      
-      // 如果是表头，所有TextRun都设为粗体
-      if (isHeader) {
-        textRuns.forEach(tr => {
-          if (tr.options) {
-            tr.options.bold = true;
-          } else {
-            tr.bold = true;
-          }
-        });
-      }
-      
-      cells.push(new TableCell({
-        children: [new Paragraph({
-          children: textRuns
-        })],
-        shading: isHeader ? {
-          type: ShadingType.SOLID,
-          color: 'F2F2F2',
-          fill: 'F2F2F2'
-        } : undefined
-      }));
+      cells.push({
+        runs: textRuns.length > 0 ? textRuns : [new TextRun('')],
+        isHeader
+      });
     });
-    
+
     return cells;
   }
 
@@ -1093,37 +1383,8 @@ class WordGenerator {
     
     if (tagName.startsWith('h')) {
       const level = parseInt(tagName.charAt(1));
-      context.bookmarkCounter++;
-      context.linkIdCounter++;
-      
-      const bookmarkId = `_Toc${context.bookmarkCounter.toString().padStart(5, '0')}`;
-      
-      // 提取纯文本用于标题
       const textContent = content.replace(/<[^>]*>/g, '').trim();
-      
-      context.headings.push({
-        level,
-        text: textContent,
-        bookmark: bookmarkId
-      });
-      
-      return new Paragraph({
-        children: [
-          new BookmarkStart(bookmarkId, context.linkIdCounter),
-          new TextRun({
-            text: textContent,
-            bold: true
-          }),
-          new BookmarkEnd(bookmarkId)
-        ],
-        heading: level === 1 ? HeadingLevel.HEADING_1 : 
-                level === 2 ? HeadingLevel.HEADING_2 :
-                level === 3 ? HeadingLevel.HEADING_3 :
-                level === 4 ? HeadingLevel.HEADING_4 :
-                level === 5 ? HeadingLevel.HEADING_5 :
-                HeadingLevel.HEADING_6,
-        spacing: { before: 400, after: 200 }
-      });
+      return this.createHeadingParagraph(textContent, level, context);
     }
     
     if (tagName === 'p' || tagName === 'div') {
@@ -1153,59 +1414,13 @@ class WordGenerator {
     }
     
     if (tagName === 'li') {
-      // 使用 parseHTMLContentToTextRuns 来处理内容，保留格式（如加粗）
-      const textRuns = this.parseHTMLContentToTextRuns(content);
-      
-      // 如果 textRuns 为空或所有 TextRun 的 text 都是空的，尝试直接处理内容
+      let textRuns = this.parseHTMLContentToTextRuns(content);
       if (textRuns.length === 0 || textRuns.every(run => !run.text || run.text.trim() === '')) {
-        // 直接处理纯文本内容
         const cleanText = content.replace(/<[^>]*>/g, '');
         const decoded = this.decodeHTMLEntities(cleanText);
-        if (decoded !== undefined && decoded !== null) {
-          return new Paragraph({
-            children: [new TextRun(`• ${decoded}`)],
-            spacing: { after: 100 },
-            indent: { left: 720 }
-          });
-        } else if (cleanText) {
-          return new Paragraph({
-            children: [new TextRun(`• ${cleanText}`)],
-            spacing: { after: 100 },
-            indent: { left: 720 }
-          });
-        }
+        textRuns = [new TextRun(decoded || '')];
       }
-      
-      // 在第一个 TextRun 前添加项目符号
-      if (textRuns.length > 0 && textRuns[0] instanceof TextRun) {
-        const firstRun = textRuns[0];
-        // 如果第一个 TextRun 的 text 是空的，直接设置文本
-        if (!firstRun.text || firstRun.text.trim() === '') {
-          // 如果第一个 TextRun 是空的，尝试从 content 中提取文本
-          const cleanText = content.replace(/<[^>]*>/g, '');
-          const decoded = this.decodeHTMLEntities(cleanText);
-          textRuns[0] = new TextRun({
-            text: `• ${decoded !== undefined && decoded !== null ? decoded : ''}`,
-            bold: firstRun.bold,
-            italics: firstRun.italics
-          });
-        } else {
-          textRuns[0] = new TextRun({
-            text: `• ${firstRun.text}`,
-            bold: firstRun.bold,
-            italics: firstRun.italics,
-            break: firstRun.break
-          });
-        }
-      } else if (textRuns.length === 0) {
-        // 如果 textRuns 是空的，直接处理内容
-        const cleanText = content.replace(/<[^>]*>/g, '');
-        const decoded = this.decodeHTMLEntities(cleanText);
-        textRuns.push(new TextRun(`• ${decoded !== undefined && decoded !== null ? decoded : ''}`));
-      } else {
-        textRuns.unshift(new TextRun('• '));
-      }
-      
+      textRuns.unshift(new TextRun('• '));
       return new Paragraph({
         children: textRuns,
         spacing: { after: 100 },
@@ -1223,7 +1438,6 @@ class WordGenerator {
    * @returns {Object} - {paragraphs: Array, headings: Array}
    */
   parseHTMLToParagraphs(html, addBookmarks = true) {
-    const elements = [];
     const headings = [];
     const context = {
       bookmarkCounter: 0,
@@ -1231,24 +1445,42 @@ class WordGenerator {
       headings
     };
     
-    // 清理HTML
     let cleanHtml = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
     cleanHtml = cleanHtml.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
     
     const bodyMatch = cleanHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
     const bodyContent = bodyMatch ? bodyMatch[1] : cleanHtml;
     
-    // 提取并替换表格
     const { processedHtml, tablePlaceholders } = this.extractAndReplaceTables(bodyContent);
+    const elements = this.parseProcessedHtml(processedHtml, tablePlaceholders, context);
     
-    // 解析块级元素
-    // 注意：不直接匹配 ul 和 ol，而是匹配其中的 li，避免重复处理
+    if (elements.length === 0) {
+      const text = bodyContent.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      if (text) {
+        elements.push(new Paragraph({
+          children: [new TextRun(text)],
+          spacing: { after: 200 }
+        }));
+      }
+    }
+    
+    return { paragraphs: elements, headings };
+  }
+
+  /**
+   * 解析已替换表格占位符的 HTML 片段
+   * @param {string} processedHtml
+   * @param {Array} tablePlaceholders
+   * @param {Object} context
+   * @returns {Array}
+   */
+  parseProcessedHtml(processedHtml, tablePlaceholders, context) {
+    const elements = [];
     const blockRegex = /<(h[1-6]|p|div|li|blockquote|pre|hr)[^>]*>([\s\S]*?)<\/\1>|__TABLE_MARKER_\d+__/gi;
     let match;
     let lastIndex = 0;
     
     while ((match = blockRegex.exec(processedHtml)) !== null) {
-      // 处理匹配前的文本
       const beforeText = processedHtml.substring(lastIndex, match.index).trim();
       if (beforeText && !beforeText.match(/^__TABLE_MARKER_\d+__$/)) {
         const text = beforeText.replace(/<[^>]*>/g, '').replace(/__TABLE_MARKER_\d+__/g, '').trim();
@@ -1262,7 +1494,6 @@ class WordGenerator {
       
       const matchedContent = match[0];
       
-      // 处理表格标记
       const tableMarkerMatch = matchedContent.match(/^__TABLE_MARKER_(\d+)__$/);
       if (tableMarkerMatch) {
         const placeholderIndex = parseInt(tableMarkerMatch[1]);
@@ -1283,13 +1514,17 @@ class WordGenerator {
         continue;
       }
       
-      // 处理其他块级元素
       const tagMatch = matchedContent.match(/<(\w+)[^>]*>/);
       if (tagMatch) {
         const tagName = tagMatch[1].toLowerCase();
-        const contentMatch = matchedContent.match(/<[^>]*>([\s\S]*?)<\/[^>]+>/);
-        // 保留原始内容，不在这里移除HTML标签，让parseBlockElement处理
-        const content = contentMatch ? contentMatch[1] : '';
+        const content = match[2] != null ? match[2] : '';
+
+        const hasNestedBlocks = /<(h[1-6]|p|ul|ol|li|table|div|pre|blockquote)|__TABLE_MARKER_\d+__/i.test(content);
+        if (tagName === 'div' && hasNestedBlocks) {
+          elements.push(...this.parseProcessedHtml(content, tablePlaceholders, context));
+          lastIndex = match.index + match[0].length;
+          continue;
+        }
         
         const paragraph = this.parseBlockElement(tagName, content, context);
         if (paragraph) {
@@ -1300,10 +1535,9 @@ class WordGenerator {
       lastIndex = match.index + match[0].length;
     }
     
-    // 处理剩余文本
     const remainingText = processedHtml.substring(lastIndex).trim();
-    if (remainingText && !remainingText.match(/^__TABLE_PLACEHOLDER_\d+__$/)) {
-      const text = remainingText.replace(/<[^>]*>/g, '').replace(/__TABLE_PLACEHOLDER_\d+__/g, '').trim();
+    if (remainingText && !remainingText.match(/^__TABLE_(PLACEHOLDER|MARKER)_\d+__$/)) {
+      const text = remainingText.replace(/<[^>]*>/g, '').replace(/__TABLE_(PLACEHOLDER|MARKER)_\d+__/g, '').trim();
       if (text) {
         elements.push(new Paragraph({
           children: [new TextRun(text)],
@@ -1312,18 +1546,7 @@ class WordGenerator {
       }
     }
     
-    // 如果没有解析到任何元素，至少添加一个包含所有文本的段落
-    if (elements.length === 0) {
-      const text = bodyContent.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-      if (text) {
-        elements.push(new Paragraph({
-          children: [new TextRun(text)],
-          spacing: { after: 200 }
-        }));
-      }
-    }
-    
-    return { paragraphs: elements, headings };
+    return elements;
   }
   
   /**
@@ -1334,6 +1557,19 @@ class WordGenerator {
    * @returns {Promise<string>} - Word 文件路径
    */
   async generateWordFromHTML(htmlTemplate, fileName, options = {}) {
+    const { paragraphs, headings } = this.parseHTMLToParagraphs(htmlTemplate, true);
+    return this.writeWordDocument(fileName, options, paragraphs, headings);
+  }
+
+  /**
+   * 将已解析的段落写入 docx 文件
+   * @param {string} fileName
+   * @param {Object} options
+   * @param {Array} paragraphs
+   * @param {Array} headings
+   * @returns {Promise<string>}
+   */
+  async writeWordDocument(fileName, options = {}, paragraphs = [], headings = []) {
     const outputPath = path.join(this.config.outputDir, `${fileName}.docx`);
     
     try {
@@ -1345,7 +1581,6 @@ class WordGenerator {
       const sections = [];
       const styleConfig = options.styleConfig || {};
       
-      // 封面页
       if (options.coverPage) {
         const coverResult = this.createCoverPage(options.coverPage, styleConfig);
         const coverChildren = coverResult.isTable ? [coverResult.table] : coverResult;
@@ -1370,10 +1605,6 @@ class WordGenerator {
         });
       }
       
-      // 解析 HTML 内容
-      const { paragraphs, headings } = this.parseHTMLToParagraphs(htmlTemplate, true);
-      
-      // 目录和正文
       const contentChildren = [];
       if (options.includeTOC && headings.length > 0) {
         const tocParagraphs = this.createTableOfContents(headings, styleConfig);
@@ -1382,7 +1613,6 @@ class WordGenerator {
       
       contentChildren.push(...paragraphs);
       
-      // 正文部分
       sections.push({
         properties: {
           type: options.coverPage ? SectionType.NEXT_PAGE : SectionType.CONTINUOUS,
