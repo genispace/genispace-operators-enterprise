@@ -1,13 +1,58 @@
 /**
  * GeniSpace Word Generator Operator
- * 
+ *
  * Word文档生成算子配置文件
  * 支持HTML、Markdown模板和数据生成高质量Word文档
- * 
+ *
  * @category document
  * @version 1.0.0
  * @author GeniSpace AI Team
  */
+
+const wordSuccessSchema = {
+  type: 'object',
+  properties: {
+    success: {
+      type: 'boolean',
+      example: true
+    },
+    data: {
+      type: 'object',
+      properties: {
+        wordURL: {
+          type: 'string',
+          description: 'Word文件访问URL',
+          example: 'https://storage.example.com/word/report.docx'
+        },
+        fileName: {
+          type: 'string',
+          description: '生成的文件名',
+          example: 'report-2025.docx'
+        },
+        fileSize: {
+          type: 'integer',
+          description: '文件大小（字节）',
+          example: 245760
+        },
+        storageProvider: {
+          type: 'string',
+          description: '存储提供商',
+          example: 'local'
+        },
+        generatedAt: {
+          type: 'string',
+          format: 'date-time',
+          description: '生成时间'
+        },
+        processingTimeMs: {
+          type: 'integer',
+          description: '处理时间（毫秒）',
+          example: 2500
+        }
+      }
+    }
+  }
+};
 
 module.exports = {
   info: {
@@ -25,9 +70,11 @@ module.exports = {
     paths: {
       '/generate-from-html': {
         post: {
+          operationId: 'generateFromHtml',
           summary: '从HTML生成Word',
           description: '根据HTML内容和可选的CSS样式生成Word文档',
-          tags: ['Word生成'],
+          tags: ['Word 生成器'],
+          security: [{ GeniSpaceAuth: [] }],
           requestBody: {
             required: true,
             content: {
@@ -39,7 +86,7 @@ module.exports = {
                     htmlContent: {
                       type: 'string',
                       description: 'HTML内容，可以是HTML片段或完整的HTML文档，支持Mustache模板语法',
-                      example: '<h1>{{title}}</h1><p>{{content}}</p>'
+                      example: '{{title}} {{content}}'
                     },
                     templateData: {
                       type: 'object',
@@ -133,50 +180,7 @@ module.exports = {
               description: 'Word生成成功',
               content: {
                 'application/json': {
-                  schema: {
-                    type: 'object',
-                    properties: {
-                      success: {
-                        type: 'boolean',
-                        example: true
-                      },
-                      data: {
-                        type: 'object',
-                        properties: {
-                          wordURL: {
-                            type: 'string',
-                            description: 'Word文件访问URL',
-                            example: 'https://storage.example.com/word/report.docx'
-                          },
-                          fileName: {
-                            type: 'string',
-                            description: '生成的文件名',
-                            example: 'report-2025.docx'
-                          },
-                          fileSize: {
-                            type: 'integer',
-                            description: '文件大小（字节）',
-                            example: 245760
-                          },
-                          storageProvider: {
-                            type: 'string',
-                            description: '存储提供商',
-                            example: 'local'
-                          },
-                          generatedAt: {
-                            type: 'string',
-                            format: 'date-time',
-                            description: '生成时间'
-                          },
-                          processingTimeMs: {
-                            type: 'integer',
-                            description: '处理时间（毫秒）',
-                            example: 2500
-                          }
-                        }
-                      }
-                    }
-                  }
+                  schema: wordSuccessSchema
                 }
               }
             },
@@ -213,9 +217,11 @@ module.exports = {
       },
       '/generate-from-markdown': {
         post: {
+          operationId: 'generateFromMarkdown',
           summary: '从Markdown模板生成Word',
           description: '根据Markdown模板和JSON数据生成Word文档，支持Mustache模板语法',
-          tags: ['Word生成'],
+          tags: ['Word 生成器'],
+          security: [{ GeniSpaceAuth: [] }],
           requestBody: {
             required: true,
             content: {
@@ -312,9 +318,7 @@ module.exports = {
               description: 'Word生成成功',
               content: {
                 'application/json': {
-                  schema: {
-                    $ref: '#/paths/~1generate-from-html/post/responses/200/content/application~1json/schema'
-                  }
+                  schema: wordSuccessSchema
                 }
               }
             },
@@ -337,7 +341,11 @@ module.exports = {
               content: {
                 'application/json': {
                   schema: {
-                    $ref: '#/paths/~1generate-from-html/post/responses/500/content/application~1json/schema'
+                    type: 'object',
+                    properties: {
+                      success: { type: 'boolean', example: false },
+                      error: { type: 'string', example: 'Word生成过程中发生错误' }
+                    }
                   }
                 }
               }
