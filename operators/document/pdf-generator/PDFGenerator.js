@@ -203,6 +203,7 @@ class PDFGenerator {
           '--no-first-run',
           '--no-zygote',
           '--disable-gpu',
+          '--disable-background-networking',
           '--disable-background-timer-throttling',
           '--disable-backgrounding-occluded-windows',
           '--disable-renderer-backgrounding',
@@ -528,10 +529,13 @@ class PDFGenerator {
       
       const page = await browser.newPage();
       
-      // 设置页面内容
-      await page.setContent(htmlContent, { 
-        waitUntil: 'networkidle0',
-        timeout: 30000 
+      // Inline markdown/HTML has no required network subresources.
+      // `networkidle0` waits until Chrome has 0 connections for 500ms; in K8s
+      // Chromium often keeps background sockets open (Safe Browsing, updater,
+      // font fallback), so setContent hangs until the 30s navigation timeout.
+      await page.setContent(htmlContent, {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000
       });
       
       // 合并 PDF 选项
