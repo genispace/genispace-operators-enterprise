@@ -1,6 +1,6 @@
 const express = require('express');
 const FilesToImages = require('./FilesToImages');
-const { sendSuccessResponse, sendErrorResponse, asyncHandler } = require('../../../src/utils/response');
+const { sendErrorResponse, asyncHandler } = require('../../../src/utils/response');
 
 const router = express.Router();
 const converter = new FilesToImages();
@@ -16,7 +16,13 @@ router.post('/convert', asyncHandler(async (req, res) => {
       maxPagesPerFile,
       maxImages,
     });
-    sendSuccessResponse(res, data, '附件已转为图片');
+    res.status(200).json({
+      success: true,
+      images: data.images,
+      skipped: data.skipped,
+      message: '附件已转为图片',
+      timestamp: new Date().toISOString(),
+    });
   } catch (error) {
     sendErrorResponse(res, `附件转图失败: ${error.message}`, 'FILES_TO_IMAGES_FAILED', {
       originalError: error.message,
