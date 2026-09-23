@@ -51,6 +51,8 @@
     "morgan": "^1.10.0",
     "mustache": "^4.2.0",
     "pdf-parse": "^1.1.1",
+    "pdfjs-dist": "3.11.174",
+    "sharp": "^0.34.4",
     "puppeteer": "^24.22.0",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.0",

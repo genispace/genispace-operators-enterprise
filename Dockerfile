@@ -5,7 +5,8 @@ FROM node:22-alpine
 # 设置工作目录
 WORKDIR /app
 
-# 安装必要的系统依赖（包含PDF生成所需的Chromium、中文字体、pdf-table-extractor所需的Python）
+# 安装必要的系统依赖（包含PDF生成所需的Chromium、中文字体、pdf-table-extractor所需的Python、
+# files-to-images 算子 Office 转 PDF 所需的 LibreOffice）
 RUN apk add --no-cache \
     dumb-init \
     ca-certificates \
@@ -20,11 +21,16 @@ RUN apk add --no-cache \
     fontconfig \
     wget \
     python3 \
-    py3-pip
+    py3-pip \
+    libreoffice-writer \
+    libreoffice-calc \
+    libreoffice-impress
 
-# 创建非root用户
+# 创建非root用户（显式创建 home 目录，LibreOffice headless 需要可写的用户配置目录）
 RUN addgroup -g 1001 -S nodejs \
-    && adduser -S nodejs -u 1001
+    && adduser -S nodejs -u 1001 \
+    && mkdir -p /home/nodejs \
+    && chown nodejs:nodejs /home/nodejs
 
 # 复制package文件
 COPY package*.json ./
