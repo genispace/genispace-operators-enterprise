@@ -72,11 +72,21 @@ module.exports = {
                       skipped: {
                         type: 'array',
                         description: '跳过的附件及原因',
-                        items: { type: 'object' },
+                        items: {
+                          type: 'object',
+                          properties: {
+                            fileName: { type: 'string' },
+                            reason: { type: 'string' },
+                          },
+                        },
                       },
                       message: {
                         type: 'string',
                         description: '结果说明',
+                      },
+                      timestamp: {
+                        type: 'string',
+                        description: '响应时间',
                       },
                     },
                   },
