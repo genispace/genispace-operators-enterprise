@@ -55,6 +55,33 @@ module.exports = {
           responses: {
             200: {
               description: '转换完成',
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'object',
+                    properties: {
+                      success: {
+                        type: 'boolean',
+                        description: '是否成功',
+                      },
+                      images: {
+                        type: 'array',
+                        description: 'PNG data URL 列表，每项为 data:image/png;base64,...',
+                        items: { type: 'string' },
+                      },
+                      skipped: {
+                        type: 'array',
+                        description: '跳过的附件及原因',
+                        items: { type: 'object' },
+                      },
+                      message: {
+                        type: 'string',
+                        description: '结果说明',
+                      },
+                    },
+                  },
+                },
+              },
             },
           },
         },
