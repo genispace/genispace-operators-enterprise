@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "test": "node test.js",
+    "test": "node --test test/*/*.test.js",
     "build": "echo 'Build completed successfully'",
     "docker:build": "docker build -t genispace/operator-enterprise:latest .",
     "docker:run": "docker run -p 8080:8080 genispace/operator-enterprise:latest"
@@ -52,14 +52,16 @@
     "mustache": "^4.2.0",
     "pdf-parse": "^1.1.1",
     "pdfjs-dist": "3.11.174",
-    "sharp": "^0.34.4",
     "puppeteer": "^24.22.0",
+    "sax": "^1.6.1",
+    "sharp": "^0.34.4",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.0",
     "textract": "^2.5.0",
     "uuid": "^9.0.1",
     "winston": "^3.11.0",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "yauzl": "^3.4.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
