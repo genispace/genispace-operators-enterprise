@@ -5,13 +5,16 @@
  * 1. 通过 GeniSpace SDK 从平台存储获取文件
  * 2. 根据文件扩展名识别文件类型
  * 3. 提取各种格式文件的文本内容
- * 4. 支持格式：PDF, DOC, DOCX, XLS, XLSX, TXT
+ * 4. 支持格式：PDF, DOC, DOCX, XLS, XLSX, PPTX, TXT
  */
 
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const logger = require('../../../src/utils/logger');
+
+const { extractPptx, ExtractionInputError } = require('./pptx');
+const supportedFormats = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'pptx', 'txt'];
 
 class TextExtractor {
   constructor(config = {}) {
@@ -80,7 +83,7 @@ class TextExtractor {
       const extension = this.getFileExtension(fileName);
       
       if (!this.isSupportedFormat(extension)) {
-        throw new Error(`不支持的文件格式: ${extension}。支持的格式: pdf, doc, docx, xls, xlsx, txt`);
+        throw new ExtractionInputError(415, 'UNSUPPORTED_FILE_FORMAT', `不支持的文件格式（${extension || '无扩展名'}）。支持 PDF、DOC、DOCX、XLS、XLSX、PPTX、TXT。`);
       }
       
       logger.info('开始获取文件内容', {
@@ -112,6 +115,7 @@ class TextExtractor {
       return text;
       
     } catch (error) {
+      if (error instanceof ExtractionInputError) throw error;
       logger.error('文本提取失败', {
         fileId,
         error: error.stack
@@ -146,7 +150,6 @@ class TextExtractor {
    * @returns {boolean}
    */
   isSupportedFormat(extension) {
-    const supportedFormats = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt'];
     return supportedFormats.includes(extension.toLowerCase());
   }
   
@@ -215,6 +218,8 @@ class TextExtractor {
         return await this.extractFromDOCX(filePath);
       case 'doc':
         return await this.extractFromDOC(filePath);
+      case 'pptx':
+        return extractPptx(filePath);
       case 'xlsx':
         return await this.extractFromXLSX(filePath);
       case 'xls':
