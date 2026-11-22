@@ -13,10 +13,10 @@ module.exports = {
   info: {
     name: 'text-extractor',
     title: '文本提取器',
-    description: '从平台存储提取各种格式文件的文本内容，支持 PDF、DOC、DOCX、XLS、XLSX、TXT 格式',
+    description: '从平台存储提取各种格式文件的文本内容，支持 PDF、DOC、DOCX、XLS、XLSX、PPTX、TXT 格式',
     version: '1.0.0',
     category: 'document',
-    tags: ['text', 'extraction', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt', 'document'],
+    tags: ['text', 'extraction', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'pptx', 'txt', 'document'],
     author: 'GeniSpace AI Team',
     license: 'MIT'
   },
@@ -39,7 +39,7 @@ module.exports = {
                   properties: {
                     fileId: {
                       type: 'string',
-                      description: '平台存储中的文件 ID，支持 PDF、DOC、DOCX、XLS、XLSX、TXT 格式',
+                      description: '平台存储中的文件 ID，支持 PDF、DOC、DOCX、XLS、XLSX、PPTX、TXT 格式',
                       example: 'file_1234567890abcdef'
                     }
                   }
@@ -122,6 +122,8 @@ module.exports = {
                 }
               }
             },
+            415: { description: '不支持的文件格式，返回可提取的格式列表' },
+            422: { description: 'PPTX 内容无法读取' },
             500: {
               description: '文本提取失败',
               content: {
@@ -135,7 +137,7 @@ module.exports = {
                       },
                       error: {
                         type: 'string',
-                        example: '文本提取失败: 不支持的文件格式'
+                        example: '文本提取服务异常'
                       },
                       code: {
                         type: 'string',

@@ -6,8 +6,9 @@
  */
 
 const express = require('express');
+const { ExtractionInputError } = require('./pptx');
 const TextExtractor = require('./TextExtractor');
-const { sendSuccessResponse, sendErrorResponse, asyncHandler } = require('../../../src/utils/response');
+const { sendSuccessResponse, sendErrorResponse, createErrorResponse, asyncHandler } = require('../../../src/utils/response');
 
 const router = express.Router();
 
@@ -73,6 +74,13 @@ router.post('/extract', validateExtractText, asyncHandler(async (req, res) => {
     sendSuccessResponse(res, responseData, isTruncated ? '文本提取成功（内容已截断）' : '文本提取成功');
     
   } catch (error) {
+    if (error instanceof ExtractionInputError) {
+      // The platform Operator client forwards message, while REST clients read error.
+      return res.status(error.status).json({
+        ...createErrorResponse(error.message, error.code),
+        message: error.message
+      });
+    }
     console.error('文本提取失败:', error);
     sendErrorResponse(res, `文本提取失败: ${error.message}`, 'TEXT_EXTRACTION_FAILED', { 
       originalError: error.message 

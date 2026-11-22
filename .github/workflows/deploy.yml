@@ -79,6 +79,8 @@ jobs:
 
       - name: Determine environment and tag prefix
         id: env
+        env:
+          TEST_DEPLOY_REGIONS: ${{ vars.TEST_DEPLOY_REGIONS }}
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             ENV="${{ github.event.inputs.environment }}"
@@ -118,7 +120,8 @@ jobs:
           elif [ "$ENV" == "test" ]; then
             echo "environment=test" >> $GITHUB_OUTPUT
             echo "tag_prefix=latest" >> $GITHUB_OUTPUT
-            echo "kustomization_paths=apps/genispace/overlays/cn/test/kustomization.yaml apps/genispace/overlays/global/test/kustomization.yaml" >> $GITHUB_OUTPUT
+            paths=$(bash scripts/test-deploy-kustomization-paths.sh)
+            echo "kustomization_paths=$paths" >> $GITHUB_OUTPUT
           fi
           
           echo "update_cicd=${UPDATE_CICD}" >> $GITHUB_OUTPUT
